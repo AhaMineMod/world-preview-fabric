@@ -36,7 +36,12 @@ public class StructuresList extends BaseObjectSelectionList<StructuresList.Struc
 
     @Override
     public void replaceEntries(Collection<StructureEntry> entryList) {
+        final StructureEntry oldEntry = getSelected();
         super.replaceEntries(entryList);
+
+        if (oldEntry != null && entryList.contains(oldEntry)) {
+            super.setSelected(oldEntry);
+        }
 
         // If we have more than one page, make sure we don't let the scrollbar run away
         double maxScroll = Math.max(0.0, super.contentHeight() - super.height);

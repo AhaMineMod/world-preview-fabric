@@ -994,6 +994,15 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
     }
 
     @Override
+    public short selectedStructureId() {
+        StructuresList.StructureEntry selected = structuresList.getSelected();
+        if (selected == null || !selected.show() || renderSettings.hideAllStructures) {
+            return -1;
+        }
+        return selected.id();
+    }
+
+    @Override
     public int[] heightColorMap() {
         ColorMap colorMap = previewData.colorMaps().get(cfg.colorMap);
         if (colorMap == null) {

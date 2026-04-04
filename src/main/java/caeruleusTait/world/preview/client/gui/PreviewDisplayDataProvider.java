@@ -35,6 +35,8 @@ public interface PreviewDisplayDataProvider {
 
     StructureRenderInfo[] renderStructureMap();
 
+    short selectedStructureId();
+
     int[] heightColorMap();
 
     int[] noiseColorMap();

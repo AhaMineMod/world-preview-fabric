@@ -50,7 +50,13 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private static final double MIN_ZOOM_FACTOR = 0.25;
     private static final double MAX_ZOOM_FACTOR = 16.0;
     private static final double ZOOM_SCROLL_FACTOR = 1.1;
-    private static final int STRUCTURE_ICON_TARGET_SIZE = 16;
+    private static final int STRUCTURE_ICON_TARGET_SIZE_GUI = 14;
+    private static final long SELECTED_STRUCTURE_PULSE_MS = 1800L;
+    private static final float SELECTED_STRUCTURE_BOB_PIXELS_GUI = 1.0f;
+    private static final long TEXTURE_REFRESH_IDLE_MS = 120L;
+    private static final long TEXTURE_REFRESH_MOVING_MS = 33L;
+    private static final long GENERATION_QUEUE_REFRESH_MS = 120L;
+    private static final long TEXTURE_RENDER_BUDGET_NS = 4_000_000L;
 
     private final Minecraft minecraft;
     private final PreviewDisplayDataProvider dataProvider;
@@ -60,6 +66,7 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private Short2LongMap visibleBiomes;
     private Short2LongMap visibleStructures;
     private NativeImage previewImg;
+    private NativeImage panScratchImg;
     private DynamicTexture previewTexture;
     private Identifier previewTextureId;
     private long[] workingVisibleBiomes;
@@ -74,7 +81,6 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private IconData spawnIcon;
     private ItemStack[] structureItems;
     private PreviewDisplayDataProvider.StructureRenderInfo[] structureRenderInfoMap;
-    private final NativeImage dummyIcon;
 
     private Component coordinatesCopiedMsg = null;
     private Instant coordinatesCopiedTime = null;
@@ -96,7 +102,21 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private int hoverHelperGridWidth;
     private int hoverHelperGridHeight;
 
-    private Queue<Long> frametimes = new ArrayDeque<>();
+    private final Queue<Long> frametimes = new ArrayDeque<>();
+    private long frametimeSum = 0L;
+    private List<RenderHelper> cachedRenderData = List.of();
+    private List<CachedStructureRender> cachedStructureRenderData = List.of();
+    private RenderStateSnapshot lastRenderedState = null;
+    private RenderStateSnapshot texturePassState = null;
+    private RenderStateSnapshot lastQueuedState = null;
+    private long lastTextureRefreshMs = 0L;
+    private long lastQueueRefreshMs = 0L;
+    private boolean forceTextureRefresh = true;
+    private boolean textureRenderInProgress = false;
+    private int textureRenderSectionCursor = 0;
+    private int textureRenderXCursor = Integer.MIN_VALUE;
+    private List<TextureDirtyRegion> textureDirtyRegions = List.of();
+    private boolean textureDirtyIsFull = true;
 
     private boolean clicked = false;
 
@@ -115,7 +135,6 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         this.visibleStructures = new Short2LongOpenHashMap();
         this.renderSettings = WorldPreview.get().renderSettings();
         this.config = WorldPreview.get().cfg();
-        this.dummyIcon = new NativeImage(16, 16, true);
         this.structureIcons = new IconData[0];
         resizeImage();
     }
@@ -123,6 +142,7 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     public void resizeImage() {
         closeDisplayTextures();
         previewImg = new NativeImage(NativeImage.Format.RGBA, texWidth, texHeight, true);
+        panScratchImg = new NativeImage(NativeImage.Format.RGBA, texWidth, texHeight, true);
         previewTexture = new DynamicTexture(() -> "world_preview:preview_display", previewImg);
         previewTextureId = Identifier.tryBuild("world_preview", "dynamic/preview_display");
         minecraft.getTextureManager().register(previewTextureId, previewTexture);
@@ -133,6 +153,17 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         for (int i = 0; i < hoverHelperGrid.length; ++i) {
             hoverHelperGrid[i] = new StructHoverHelperCell(new ArrayList<>());
         }
+        cachedRenderData = List.of();
+        cachedStructureRenderData = List.of();
+        forceTextureRefresh = true;
+        lastRenderedState = null;
+        texturePassState = null;
+        lastQueuedState = null;
+        textureRenderInProgress = false;
+        textureRenderSectionCursor = 0;
+        textureRenderXCursor = Integer.MIN_VALUE;
+        textureDirtyRegions = fullTextureDirtyRegions();
+        textureDirtyIsFull = true;
     }
 
     public void setSize(int width, int height) {
@@ -187,6 +218,15 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             colorMapGrayScale[i] = grayScale(colorMap[i]);
             cavesMap[i] = rawBiomeMap[i].isCave();
         }
+        forceTextureRefresh = true;
+        lastRenderedState = null;
+        texturePassState = null;
+        cachedStructureRenderData = List.of();
+        textureRenderInProgress = false;
+        textureRenderSectionCursor = 0;
+        textureRenderXCursor = Integer.MIN_VALUE;
+        textureDirtyRegions = fullTextureDirtyRegions();
+        textureDirtyIsFull = true;
     }
 
     private void closeIconTextures() {
@@ -209,6 +249,10 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             previewTextureId = null;
             previewTexture = null;
             previewImg = null;
+        }
+        if (panScratchImg != null) {
+            panScratchImg.close();
+            panScratchImg = null;
         }
     }
 
@@ -238,7 +282,17 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         final int yMax = yMin + height;
 
         final Instant renderStart = Instant.now();
-        queueGeneration();
+        final long nowMs = System.currentTimeMillis();
+        final RenderStateSnapshot currentState = currentRenderState();
+        final boolean queueStateChanged = !currentState.equals(lastQueuedState);
+        final long queueRefreshIntervalMs = queueStateChanged ? TEXTURE_REFRESH_MOVING_MS : GENERATION_QUEUE_REFRESH_MS;
+        final boolean shouldQueueGeneration = forceTextureRefresh
+                || (nowMs - lastQueueRefreshMs >= queueRefreshIntervalMs);
+        if (shouldQueueGeneration) {
+            queueGeneration();
+            lastQueuedState = currentState;
+            lastQueueRefreshMs = nowMs;
+        }
         synchronized (dataProvider) {
             if (dataProvider.setupFailed()) {
                 previewImg.fillRect(0, 0, texWidth, texHeight, 0xFF000000);
@@ -264,20 +318,74 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                 final int centerY = getY() + (height / 2);
                 guiGraphics.drawCenteredString(minecraft.font, MSG_PREVIEW_SETUP_LOADING, centerX, centerY, 0xFFFFFFFF);
             } else {
-                Arrays.fill(workingVisibleBiomes, (short) 0);
-                Arrays.fill(workingVisibleStructures, (short) 0);
-                Arrays.stream(hoverHelperGrid).forEach(cell -> cell.entries.clear());
-                final List<RenderHelper> renderData = generateRenderData();
-                updateTexture(renderData);
+                final boolean renderStateChanged = !currentState.equals(lastRenderedState);
+                final long refreshIntervalMs = (textureRenderInProgress || renderStateChanged) ? TEXTURE_REFRESH_MOVING_MS : TEXTURE_REFRESH_IDLE_MS;
+                final boolean shouldRefreshTexture = forceTextureRefresh
+                        || renderStateChanged
+                        || textureRenderInProgress
+                        || cachedRenderData.isEmpty()
+                        || (nowMs - lastTextureRefreshMs >= refreshIntervalMs);
 
-                previewTexture.upload();
+                boolean publishVisibility = false;
+                if (shouldRefreshTexture) {
+                    final boolean passStateChanged = texturePassState != null && !currentState.equals(texturePassState);
+                    final boolean shouldRestartPass = forceTextureRefresh
+                            || passStateChanged
+                            || !textureRenderInProgress
+                            || cachedRenderData.isEmpty();
+                    if (shouldRestartPass) {
+                        final RenderStateSnapshot sourceTextureState = texturePassState != null ? texturePassState : lastRenderedState;
+                        List<TextureDirtyRegion> dirtyRegions = fullTextureDirtyRegions();
+                        boolean usedPanShift = false;
+                        if (renderStateChanged && !forceTextureRefresh && !cachedRenderData.isEmpty()) {
+                            final PanShiftResult panShiftResult = shiftTextureForPan(sourceTextureState, currentState);
+                            if (panShiftResult != null) {
+                                usedPanShift = true;
+                                final List<TextureDirtyRegion> carryOverDirtyRegions;
+                                if (textureRenderInProgress) {
+                                    carryOverDirtyRegions = shiftTextureDirtyRegions(textureDirtyRegions, panShiftResult.shiftX(), panShiftResult.shiftZ());
+                                } else {
+                                    carryOverDirtyRegions = List.of();
+                                }
+                                final List<TextureDirtyRegion> mergedDirtyRegions = new ArrayList<>(carryOverDirtyRegions.size() + panShiftResult.exposedRegions().size());
+                                mergedDirtyRegions.addAll(carryOverDirtyRegions);
+                                mergedDirtyRegions.addAll(panShiftResult.exposedRegions());
+                                dirtyRegions = mergeTextureDirtyRegions(mergedDirtyRegions);
+                            }
+                        }
+
+                        // Keep previous pixels as a visual base during non-pan state changes (e.g. Y/height changes),
+                        // then incrementally overwrite dirty tiles to avoid black flashing.
+                        final boolean fullTextureReset = forceTextureRefresh || cachedRenderData.isEmpty();
+                        texturePassState = currentState;
+                        if (renderStateChanged || forceTextureRefresh || cachedRenderData.isEmpty()) {
+                            cachedRenderData = generateRenderData();
+                        }
+                        rebuildStructureRenderCache(cachedRenderData);
+                        beginTextureRenderPass(cachedRenderData, fullTextureReset, dirtyRegions);
+                    }
+
+                    final boolean texturePassCompleted = continueTextureRenderPass(cachedRenderData, TEXTURE_RENDER_BUDGET_NS);
+                    previewTexture.upload();
+                    lastTextureRefreshMs = nowMs;
+                    forceTextureRefresh = false;
+                    publishVisibility = texturePassCompleted;
+                    if (texturePassCompleted) {
+                        lastRenderedState = texturePassState != null ? texturePassState : currentState;
+                        texturePassState = null;
+                    }
+                }
 
                 // Render the main texture
                 WorldPreviewClient.renderTexture(guiGraphics, previewTextureId, xMin, yMin, xMax, yMax);
 
                 // Overlay structure icons
+                final boolean collectHoverData = isHovered;
+                if (collectHoverData) {
+                    clearHoverHelperGrid();
+                }
                 guiGraphics.enableScissor(xMin, yMin, xMax, yMax);
-                renderStructures(renderData, guiGraphics);
+                renderStructures(guiGraphics, collectHoverData);
                 renderPlayerAndSpawn(guiGraphics);
                 guiGraphics.disableScissor();
 
@@ -287,7 +395,9 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                 double mouseZ = (minecraft.mouseHandler.ypos() * minecraft.getWindow().getGuiScaledHeight()) / minecraft.getWindow()
                         .getScreenHeight();
 
-                biomesChanged();
+                if (publishVisibility) {
+                    biomesChanged();
+                }
                 updateTooltip(guiGraphics, mouseX, mouseZ);
             }
         }
@@ -320,18 +430,222 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         guiGraphics.drawString(minecraft.font, zoomLabel, zoomXMin + 4, zoomYMin + 3, 0xFFFFFFFF);
 
         final Instant renderEnd = Instant.now();
-        frametimes.add(Duration.between(renderStart, renderEnd).abs().toMillis());
+        final long frameTimeMs = Duration.between(renderStart, renderEnd).abs().toMillis();
+        frametimes.add(frameTimeMs);
+        frametimeSum += frameTimeMs;
         while (frametimes.size() > 30) {
-            frametimes.poll();
+            final Long removed = frametimes.poll();
+            if (removed != null) {
+                frametimeSum -= removed;
+            }
         }
-        long sum = frametimes.stream().reduce(0L, Long::sum);
 
-        if (config.showFrameTime) {
-            guiGraphics.drawString(minecraft.font, sum / frametimes.size() + " ms", 5, 5, 0xFFFFFFFF);
+        if (config.showFrameTime && !frametimes.isEmpty()) {
+            guiGraphics.drawString(minecraft.font, frametimeSum / frametimes.size() + " ms", 5, 5, 0xFFFFFFFF);
         }
     }
 
     private record TextureCoordinate(int x, int z) {}
+
+    private record TextureDirtyRegion(int xMin, int zMin, int xMax, int zMax) {
+        boolean intersects(int oXMin, int oZMin, int oXMax, int oZMax) {
+            return oXMin < xMax && oXMax > xMin && oZMin < zMax && oZMax > zMin;
+        }
+    }
+
+    private record PanShiftResult(int shiftX, int shiftZ, List<TextureDirtyRegion> exposedRegions) {
+    }
+
+    private record RenderStateSnapshot(
+            int centerX,
+            int centerY,
+            int centerZ,
+            int texWidth,
+            int texHeight,
+            long zoomBits,
+            int modeOrdinal,
+            int quartExpand,
+            int quartStride,
+            short selectedBiomeId,
+            boolean highlightCaves
+    ) {
+    }
+
+    private RenderStateSnapshot currentRenderState() {
+        final BlockPos currentCenter = center();
+        return new RenderStateSnapshot(
+                currentCenter.getX(),
+                currentCenter.getY(),
+                currentCenter.getZ(),
+                texWidth,
+                texHeight,
+                Double.doubleToLongBits(zoomFactor),
+                renderSettings.mode.ordinal(),
+                renderSettings.quartExpand(),
+                renderSettings.quartStride(),
+                selectedBiomeId,
+                highlightCaves
+        );
+    }
+
+    private List<TextureDirtyRegion> fullTextureDirtyRegions() {
+        return List.of(new TextureDirtyRegion(0, 0, texWidth, texHeight));
+    }
+
+    private TextureDirtyRegion clipTextureDirtyRegion(TextureDirtyRegion region) {
+        final int xMin = Math.max(0, Math.min(texWidth, region.xMin()));
+        final int zMin = Math.max(0, Math.min(texHeight, region.zMin()));
+        final int xMax = Math.max(0, Math.min(texWidth, region.xMax()));
+        final int zMax = Math.max(0, Math.min(texHeight, region.zMax()));
+        if (xMax <= xMin || zMax <= zMin) {
+            return null;
+        }
+        return new TextureDirtyRegion(xMin, zMin, xMax, zMax);
+    }
+
+    private boolean dirtyRegionsTouchOrOverlap(TextureDirtyRegion a, TextureDirtyRegion b) {
+        return a.xMin() <= b.xMax() && a.xMax() >= b.xMin()
+                && a.zMin() <= b.zMax() && a.zMax() >= b.zMin();
+    }
+
+    private List<TextureDirtyRegion> mergeTextureDirtyRegions(List<TextureDirtyRegion> dirtyRegions) {
+        if (dirtyRegions.isEmpty()) {
+            return List.of();
+        }
+        final List<TextureDirtyRegion> merged = new ArrayList<>();
+        for (TextureDirtyRegion regionRaw : dirtyRegions) {
+            TextureDirtyRegion region = clipTextureDirtyRegion(regionRaw);
+            if (region == null) {
+                continue;
+            }
+            boolean changed = true;
+            while (changed) {
+                changed = false;
+                for (int i = 0; i < merged.size(); ++i) {
+                    final TextureDirtyRegion existing = merged.get(i);
+                    if (dirtyRegionsTouchOrOverlap(existing, region)) {
+                        region = new TextureDirtyRegion(
+                                Math.min(existing.xMin(), region.xMin()),
+                                Math.min(existing.zMin(), region.zMin()),
+                                Math.max(existing.xMax(), region.xMax()),
+                                Math.max(existing.zMax(), region.zMax())
+                        );
+                        merged.remove(i);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            merged.add(region);
+            if (merged.size() > 8) {
+                return fullTextureDirtyRegions();
+            }
+        }
+        return merged.isEmpty() ? List.of() : merged;
+    }
+
+    private List<TextureDirtyRegion> shiftTextureDirtyRegions(List<TextureDirtyRegion> dirtyRegions, int shiftX, int shiftZ) {
+        if (dirtyRegions.isEmpty()) {
+            return List.of();
+        }
+        final List<TextureDirtyRegion> shiftedRegions = new ArrayList<>(dirtyRegions.size());
+        for (TextureDirtyRegion region : dirtyRegions) {
+            shiftedRegions.add(new TextureDirtyRegion(
+                    region.xMin() - shiftX,
+                    region.zMin() - shiftZ,
+                    region.xMax() - shiftX,
+                    region.zMax() - shiftZ
+            ));
+        }
+        return mergeTextureDirtyRegions(shiftedRegions);
+    }
+
+    private void setTextureDirtyRegions(List<TextureDirtyRegion> dirtyRegions) {
+        textureDirtyRegions = dirtyRegions;
+        textureDirtyIsFull = dirtyRegions.size() == 1
+                && dirtyRegions.get(0).xMin == 0
+                && dirtyRegions.get(0).zMin == 0
+                && dirtyRegions.get(0).xMax == texWidth
+                && dirtyRegions.get(0).zMax == texHeight;
+    }
+
+    private boolean intersectsTextureDirtyRegion(int xMin, int zMin, int xMax, int zMax) {
+        if (textureDirtyIsFull) {
+            return true;
+        }
+        for (TextureDirtyRegion region : textureDirtyRegions) {
+            if (region.intersects(xMin, zMin, xMax, zMax)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isPanOnlyStateChange(RenderStateSnapshot fromState, RenderStateSnapshot toState) {
+        if (fromState == null || toState == null) {
+            return false;
+        }
+        if (fromState.centerX == toState.centerX && fromState.centerZ == toState.centerZ) {
+            return false;
+        }
+        return fromState.centerY == toState.centerY
+                && fromState.texWidth == toState.texWidth
+                && fromState.texHeight == toState.texHeight
+                && fromState.zoomBits == toState.zoomBits
+                && fromState.modeOrdinal == toState.modeOrdinal
+                && fromState.quartExpand == toState.quartExpand
+                && fromState.quartStride == toState.quartStride
+                && fromState.selectedBiomeId == toState.selectedBiomeId
+                && fromState.highlightCaves == toState.highlightCaves;
+    }
+
+    private PanShiftResult shiftTextureForPan(RenderStateSnapshot fromState, RenderStateSnapshot toState) {
+        if (panScratchImg == null || previewImg == null || !isPanOnlyStateChange(fromState, toState)) {
+            return null;
+        }
+
+        final double effectiveScale = effectiveScaleBlockPos();
+        if (effectiveScale <= 0.0) {
+            return null;
+        }
+
+        final double shiftXExact = (toState.centerX - fromState.centerX) / effectiveScale;
+        final double shiftZExact = (toState.centerZ - fromState.centerZ) / effectiveScale;
+        final int shiftX = (int) Math.round(shiftXExact);
+        final int shiftZ = (int) Math.round(shiftZExact);
+        if (Math.abs(shiftX) >= texWidth || Math.abs(shiftZ) >= texHeight) {
+            return null;
+        }
+
+        final int copyWidth = texWidth - Math.abs(shiftX);
+        final int copyHeight = texHeight - Math.abs(shiftZ);
+        if (copyWidth <= 0 || copyHeight <= 0) {
+            return null;
+        }
+
+        final int srcX = Math.max(0, shiftX);
+        final int srcZ = Math.max(0, shiftZ);
+        final int dstX = Math.max(0, -shiftX);
+        final int dstZ = Math.max(0, -shiftZ);
+
+        panScratchImg.fillRect(0, 0, texWidth, texHeight, 0xFF000000);
+        previewImg.copyRect(panScratchImg, srcX, srcZ, dstX, dstZ, copyWidth, copyHeight, false, false);
+        previewImg.copyFrom(panScratchImg);
+
+        final List<TextureDirtyRegion> dirtyRegions = new ArrayList<>(2);
+        if (shiftX > 0) {
+            dirtyRegions.add(new TextureDirtyRegion(texWidth - shiftX, 0, texWidth, texHeight));
+        } else if (shiftX < 0) {
+            dirtyRegions.add(new TextureDirtyRegion(0, 0, -shiftX, texHeight));
+        }
+        if (shiftZ > 0) {
+            dirtyRegions.add(new TextureDirtyRegion(0, texHeight - shiftZ, texWidth, texHeight));
+        } else if (shiftZ < 0) {
+            dirtyRegions.add(new TextureDirtyRegion(0, 0, texWidth, -shiftZ));
+        }
+
+        return new PanShiftResult(shiftX, shiftZ, mergeTextureDirtyRegions(dirtyRegions));
+    }
 
     private String formatZoomLabel() {
         final double roundedZoom = Math.round(zoomFactor * 100.0) / 100.0;
@@ -382,6 +696,12 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         hoverHelperGrid[(cellX * hoverHelperGridHeight) + cellZ].entries.add(entry);
     }
 
+    private void clearHoverHelperGrid() {
+        for (StructHoverHelperCell cell : hoverHelperGrid) {
+            cell.entries.clear();
+        }
+    }
+
     private void queueGeneration() {
         final BlockPos center = center();
         final int xMin = minBlockX(center);
@@ -396,6 +716,24 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             PreviewSection dataSection,
             PreviewSection structureSection,
             PreviewSection.AccessData accessData
+    ) {
+    }
+
+    private record CachedStructureRender(
+            short structureId,
+            PreviewSection.PreviewStruct structure,
+            Identifier iconTexture,
+            ItemStack item,
+            int texCenterX,
+            int texCenterZ,
+            int texStartX,
+            int texStartZ,
+            int iconWidth,
+            int iconHeight,
+            int baseDrawX,
+            int baseDrawZ,
+            int baseDrawWidth,
+            int baseDrawHeight
     ) {
     }
 
@@ -458,19 +796,36 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         return res;
     }
 
-    private void updateTexture(List<RenderHelper> renderData) {
+    private void beginTextureRenderPass(List<RenderHelper> renderData, boolean clearTexture, List<TextureDirtyRegion> dirtyRegions) {
+        if (clearTexture) {
+            previewImg.fillRect(0, 0, texWidth, texHeight, 0xFF000000);
+        }
+        setTextureDirtyRegions(dirtyRegions.isEmpty() ? List.of() : dirtyRegions);
+        Arrays.fill(workingVisibleBiomes, 0L);
+        textureRenderSectionCursor = 0;
+        textureRenderXCursor = Integer.MIN_VALUE;
+        textureRenderInProgress = !renderData.isEmpty();
+    }
+
+    private boolean continueTextureRenderPass(List<RenderHelper> renderData, long budgetNs) {
+        if (renderData.isEmpty()) {
+            textureRenderInProgress = false;
+            return true;
+        }
+
         final int quartStride = renderSettings.quartStride();
         final int blockStride = quartStride * QuartPos.SIZE;
         final BlockPos center = center();
         final int xMin = minBlockX(center);
         final int zMin = minBlockZ(center);
         final double effectiveScale = effectiveScaleBlockPos();
-        previewImg.fillRect(0, 0, texWidth, texHeight, 0xFF000000);
+        final var mode = renderSettings.mode;
+        final long deadline = System.nanoTime() + budgetNs;
 
-        // Render the biomes / heightmap
-        for (RenderHelper r : renderData) {
-            // Draw all the relevant data in the section
-            for(int x = r.accessData.minX(); x < r.accessData.maxX(); x += quartStride) {
+        while (textureRenderSectionCursor < renderData.size()) {
+            RenderHelper r = renderData.get(textureRenderSectionCursor);
+            int startX = textureRenderXCursor == Integer.MIN_VALUE ? r.accessData.minX() : textureRenderXCursor;
+            for (int x = startX; x < r.accessData.maxX(); x += quartStride) {
                 final int blockStartX = QuartPos.toBlock(r.dataSection.quartX() + x);
                 int texXMin = (int) Math.floor((blockStartX - xMin) / effectiveScale);
                 int texXMax = (int) Math.ceil((blockStartX + blockStride - xMin) / effectiveScale);
@@ -497,25 +852,35 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                         continue;
                     }
 
-                    // Read the biome data
-                    short rawData = r.dataSection.get(x, z);
+                    final boolean needsDraw = intersectsTextureDirtyRegion(texXMin, texZMin, texXMax, texZMax);
                     int color = 0xFF000000;
-                    switch (renderSettings.mode) {
+                    switch (mode) {
                         case BIOMES -> {
+                            short rawData = r.dataSection.get(x, z);
                             if (rawData >= 0) {
-                                color = selectedBiomeId >= 0 || highlightCaves ? colorMapGrayScale[rawData] : colorMap[rawData];
-                                if (selectedBiomeId == rawData || (highlightCaves && cavesMap[rawData])) {
-                                    color = colorMap[rawData];
-                                }
                                 workingVisibleBiomes[rawData] += 1;
+                                if (needsDraw) {
+                                    color = selectedBiomeId >= 0 || highlightCaves ? colorMapGrayScale[rawData] : colorMap[rawData];
+                                    if (selectedBiomeId == rawData || (highlightCaves && cavesMap[rawData])) {
+                                        color = colorMap[rawData];
+                                    }
+                                }
                             }
                         }
                         case HEIGHTMAP -> {
+                            if (!needsDraw) {
+                                continue;
+                            }
+                            short rawData = r.dataSection.get(x, z);
                             if (rawData > Short.MIN_VALUE) {
                                 color = heightColorMap[rawData - dataProvider.yMin()];
                             }
                         }
                         case INTERSECTIONS -> {
+                            if (!needsDraw) {
+                                continue;
+                            }
+                            short rawData = r.dataSection.get(x, z);
                             if (rawData >= 0) {
                                 // Main y-intersection
                                 color = MapColor.byId(rawData).col;
@@ -527,6 +892,10 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                             }
                         }
                         case NOISE_TEMPERATURE, NOISE_HUMIDITY, NOISE_CONTINENTALNESS, NOISE_EROSION, NOISE_DEPTH, NOISE_WEIRDNESS -> {
+                            if (!needsDraw) {
+                                continue;
+                            }
+                            short rawData = r.dataSection.get(x, z);
                             if (rawData > Short.MIN_VALUE) {
                                 final float data = ((float) rawData) / ((float) Short.MAX_VALUE);
                                 final int idx = Math.min(1023, Math.max(0, 512 + (int) (data * 512)));
@@ -534,6 +903,10 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                             }
                         }
                         case NOISE_PEAKS_AND_VALLEYS -> {
+                            if (!needsDraw) {
+                                continue;
+                            }
+                            short rawData = r.dataSection.get(x, z);
                             if (rawData > Short.MIN_VALUE) {
                                 final float data = ((float) rawData) / 0.75f / ((float) Short.MAX_VALUE);
                                 final float pvData = NoiseRouterData.peaksAndValleys(Math.min(1.0f, Math.max(-1.0f, data)));
@@ -543,30 +916,58 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                         }
                     }
 
-                    previewImg.fillRect(texXMin, texZMin, texXSize, texZSize, color);
+                    if (needsDraw) {
+                        previewImg.fillRect(texXMin, texZMin, texXSize, texZSize, color);
+                    }
+                }
+
+                if (System.nanoTime() >= deadline) {
+                    textureRenderXCursor = x + quartStride;
+                    textureRenderInProgress = true;
+                    return false;
                 }
             }
-
-
+            textureRenderSectionCursor += 1;
+            textureRenderXCursor = Integer.MIN_VALUE;
         }
+        textureRenderInProgress = false;
+        return true;
     }
 
-    private void renderStructures(List<RenderHelper> renderData, GuiGraphics guiGraphics) {
-        if (!config.sampleStructures) {
+    private void rebuildStructureRenderCache(List<RenderHelper> renderData) {
+        if (workingVisibleStructures == null || structureIcons == null || structureItems == null || structureRenderInfoMap == null) {
+            cachedStructureRenderData = List.of();
+            return;
+        }
+
+        Arrays.fill(workingVisibleStructures, 0L);
+        if (!config.sampleStructures || renderData.isEmpty()) {
+            cachedStructureRenderData = List.of();
             return;
         }
 
         final double guiScale = minecraft.getWindow().getGuiScale();
+        final double invGuiScale = 1.0 / guiScale;
+        final int targetIconSizeTex = Math.max(1, (int) Math.round(STRUCTURE_ICON_TARGET_SIZE_GUI * guiScale));
 
-        // Draw structures
-        //  - Do this in a separate RenderHelper loop to ensure that the biome data is overwritten
+        final BlockPos center = center();
+        final int xMin = minBlockX(center);
+        final int zMin = minBlockZ(center);
+        final double effectiveScale = effectiveScaleBlockPos();
+
+        final List<CachedStructureRender> structureCache = new ArrayList<>();
         for (RenderHelper r : renderData) {
             for (PreviewSection.PreviewStruct structure : r.structureSection.structures()) {
-                short id = structure.structureId();
-                TextureCoordinate texCenter = blockToTexture(structure.center());
-                IconData iconData = structureIcons[id];
-                Identifier iconTexture = iconData != null ? iconData.textureId() : null;
-                ItemStack item = structureItems[id];
+                final short id = structure.structureId();
+                if (id < 0 || id >= structureIcons.length || id >= structureItems.length || id >= structureRenderInfoMap.length) {
+                    continue;
+                }
+
+                final int texCenterX = (int) Math.floor((structure.center().getX() - xMin) / effectiveScale);
+                final int texCenterZ = (int) Math.floor((structure.center().getZ() - zMin) / effectiveScale);
+                final IconData iconData = structureIcons[id];
+                final Identifier iconTexture = iconData != null ? iconData.textureId() : null;
+                final ItemStack item = structureItems[id];
                 if (iconTexture == null && item == null) {
                     continue;
                 }
@@ -574,58 +975,92 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                 final int iconWidth;
                 final int iconHeight;
                 if (item != null) {
-                    iconWidth = STRUCTURE_ICON_TARGET_SIZE;
-                    iconHeight = STRUCTURE_ICON_TARGET_SIZE;
+                    iconWidth = targetIconSizeTex;
+                    iconHeight = targetIconSizeTex;
                 } else {
-                    final int rawIconWidth = iconData != null ? iconData.width() : dummyIcon.getWidth();
-                    final int rawIconHeight = iconData != null ? iconData.height() : dummyIcon.getHeight();
-                    final double iconScale = STRUCTURE_ICON_TARGET_SIZE / (double) Math.max(rawIconWidth, rawIconHeight);
+                    final int rawIconWidth = iconData.width();
+                    final int rawIconHeight = iconData.height();
+                    final double iconScale = targetIconSizeTex / (double) Math.max(rawIconWidth, rawIconHeight);
                     iconWidth = Math.max(1, (int) Math.round(rawIconWidth * iconScale));
                     iconHeight = Math.max(1, (int) Math.round(rawIconHeight * iconScale));
                 }
 
-                // Check if visible
-                final int xMin = -(iconWidth / 2);
-                final int xMax = (iconWidth / 2) + 1 + texWidth;
-                final int zMin = -(iconHeight / 2);
-                final int zMax = (iconHeight / 2) + 1 + texHeight;
-                if (texCenter.x < xMin || texCenter.z < zMin || texCenter.x > xMax || texCenter.z > zMax) {
+                final int visibleMinX = -(iconWidth / 2);
+                final int visibleMaxX = (iconWidth / 2) + 1 + texWidth;
+                final int visibleMinZ = -(iconHeight / 2);
+                final int visibleMaxZ = (iconHeight / 2) + 1 + texHeight;
+                if (texCenterX < visibleMinX || texCenterZ < visibleMinZ || texCenterX > visibleMaxX || texCenterZ > visibleMaxZ) {
                     continue;
                 }
 
                 workingVisibleStructures[id] += 1;
 
-                // Do not render hidden structures, but still count them
-                if (!structureRenderInfoMap[id].show() || renderSettings.hideAllStructures) {
-                    continue;
-                }
+                final int texStartX = texCenterX - (iconWidth / 2);
+                final int texStartZ = texCenterZ - (iconHeight / 2);
+                final int baseDrawX = getX() + (int) Math.round(texStartX * invGuiScale);
+                final int baseDrawZ = getY() + (int) Math.round(texStartZ * invGuiScale);
+                final int baseDrawWidth = Math.max(1, (int) Math.round(iconWidth * invGuiScale));
+                final int baseDrawHeight = Math.max(1, (int) Math.round(iconHeight * invGuiScale));
+                structureCache.add(new CachedStructureRender(
+                        id, structure, iconTexture, item, texCenterX, texCenterZ,
+                        texStartX, texStartZ, iconWidth, iconHeight,
+                        baseDrawX, baseDrawZ, baseDrawWidth, baseDrawHeight
+                ));
+            }
+        }
+        cachedStructureRenderData = structureCache;
+    }
 
-                // Render icon / item
-                final int texStartX = texCenter.x - (iconWidth / 2);
-                final int texStartZ = texCenter.z - (iconHeight / 2);
+    private void renderStructures(GuiGraphics guiGraphics, boolean collectHoverData) {
+        if (!config.sampleStructures || cachedStructureRenderData.isEmpty()) {
+            return;
+        }
 
-                final int rXMin = getX() + (int) Math.round(texStartX / guiScale);
-                final int rZMin = getY() + (int) Math.round(texStartZ / guiScale);
-                final int renderWidth = Math.max(1, (int) Math.round(iconWidth / guiScale));
-                final int renderHeight = Math.max(1, (int) Math.round(iconHeight / guiScale));
-                final int rXMax = rXMin + renderWidth;
-                final int rZMax = rZMin + renderHeight;
+        final double guiScale = minecraft.getWindow().getGuiScale();
+        final int selectedStructureId = dataProvider.selectedStructureId();
+        final long nowMs = System.currentTimeMillis();
+        final double phase = ((nowMs % SELECTED_STRUCTURE_PULSE_MS) / (double) SELECTED_STRUCTURE_PULSE_MS) * (Math.PI * 2.0);
+        final float selectedBobOffsetGui = SELECTED_STRUCTURE_BOB_PIXELS_GUI * (float) Math.sin(phase);
+        final boolean hideAllStructures = renderSettings.hideAllStructures;
 
-                if (item != null) {
-                    guiGraphics.pose().pushMatrix();
-                    guiGraphics.pose().translate(rXMin, rZMin);
-                    guiGraphics.pose().scale(renderWidth / 16f, renderHeight / 16f);
-                    guiGraphics.renderItem(item, 0, 0);
-                    guiGraphics.pose().popMatrix();
-                } else if (iconTexture != null) {
-                    WorldPreviewClient.renderTexture(guiGraphics, iconTexture, rXMin, rZMin, rXMax, rZMax);
-                }
+        for (CachedStructureRender entry : cachedStructureRenderData) {
+            final short id = entry.structureId();
+            if (hideAllStructures || !structureRenderInfoMap[id].show()) {
+                continue;
+            }
 
+            final int bobOffsetGui = id == selectedStructureId ? Math.round(selectedBobOffsetGui) : 0;
+            final int drawWidth = entry.baseDrawWidth();
+            final int drawHeight = entry.baseDrawHeight();
+            final int drawXMin = entry.baseDrawX();
+            final int drawZMin = entry.baseDrawZ() + bobOffsetGui;
+            final int drawXMax = drawXMin + drawWidth;
+            final int drawZMax = drawZMin + drawHeight;
+
+            if (entry.item() != null) {
+                guiGraphics.pose().pushMatrix();
+                guiGraphics.pose().translate(drawXMin, drawZMin);
+                guiGraphics.pose().scale(drawWidth / 16f, drawHeight / 16f);
+                guiGraphics.renderItem(entry.item(), 0, 0);
+                guiGraphics.pose().popMatrix();
+            } else if (entry.iconTexture() != null) {
+                WorldPreviewClient.renderTexture(guiGraphics, entry.iconTexture(), drawXMin, drawZMin, drawXMax, drawZMax);
+            }
+
+            if (collectHoverData) {
+                final int bobOffsetTex = id == selectedStructureId ? (int) Math.round(bobOffsetGui * guiScale) : 0;
                 putHoverStructEntry(
-                        texCenter,
+                        new TextureCoordinate(entry.texCenterX(), entry.texCenterZ() + bobOffsetTex),
                         new StructHoverHelperEntry(
-                                new BoundingBox(texStartX, 0, texStartZ, texStartX + iconWidth, 0, texStartZ + iconHeight),
-                                structure
+                                new BoundingBox(
+                                        entry.texStartX(),
+                                        0,
+                                        entry.texStartZ() + bobOffsetTex,
+                                        entry.texStartX() + entry.iconWidth(),
+                                        0,
+                                        entry.texStartZ() + bobOffsetTex + entry.iconHeight()
+                                ),
+                                entry.structure()
                         )
                 );
             }
