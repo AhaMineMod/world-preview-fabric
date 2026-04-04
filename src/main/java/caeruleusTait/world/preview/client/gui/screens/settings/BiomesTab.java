@@ -21,12 +21,13 @@ import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.core.Holder;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.dimension.LevelStem;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -47,6 +48,9 @@ public class BiomesTab implements Tab {
     private final ColorChooser colorChooser;
     private BiomesList.BiomeEntry selectedEntry;
     private boolean blockUpdates = false;
+    private int appliedBiomeVersion = -1;
+    private BiomeListFilter appliedFilter = null;
+    private Identifier appliedDimension = null;
 
     private final Button resetBtn;
     private final Button applyBtn;
@@ -68,16 +72,15 @@ public class BiomesTab implements Tab {
         final int FULL_WIDTH = EDIT_WIDTH + LABEL_WIDTH + COLUMN_SPACING + 1; // +1 because of EditBox
 
         filterCycleButton = CycleButton
-                .builder(BiomeListFilter::toComponent)
+                .builder(BiomeListFilter::toComponent, BiomeListFilter.DIMENSION)
                 .withValues(BiomeListFilter.values())
-                .withInitialValue(BiomeListFilter.DIMENSION)
                 .create(
                         0,
                         0,
                         FULL_WIDTH,
                         LINE_HEIGHT,
                         COLOR_LIST_FILTER,
-                        (b, v) -> biomesList.replaceEntries(v.apply(previewContainer.allBiomes()))
+                        (b, v) -> refreshBiomeEntriesIfNeeded(true)
                 );
         toRender.add(filterCycleButton);
 
@@ -157,7 +160,8 @@ public class BiomesTab implements Tab {
                 statusLabel.setText(selectedEntry.statusComponent());
             }
         });
-        biomesList.setSelected(previewContainer.allBiomes().isEmpty() ? null : previewContainer.allBiomes().get(0));
+        refreshBiomeEntriesIfNeeded(true);
+        updateStatus();
 
         layout.rowSpacing(LINE_VSPACE).columnSpacing(COLUMN_SPACING);
 
@@ -193,8 +197,37 @@ public class BiomesTab implements Tab {
         }
     }
 
+    private void refreshBiomeEntriesIfNeeded(boolean force) {
+        final BiomeListFilter currentFilter = filterCycleButton.getValue();
+        final Identifier currentDimension = WorldPreview.get().renderSettings().dimension;
+        final int currentBiomeVersion = previewContainer.allBiomesVersion();
+
+        final boolean needsRefresh = force
+                || currentBiomeVersion != appliedBiomeVersion
+                || currentFilter != appliedFilter
+                || (currentFilter == BiomeListFilter.DIMENSION && !Objects.equals(currentDimension, appliedDimension));
+        if (!needsRefresh) {
+            return;
+        }
+
+        final List<BiomesList.BiomeEntry> filteredBiomes = currentFilter.apply(previewContainer, previewContainer.allBiomes());
+        biomesList.replaceEntries(filteredBiomes);
+        if (biomesList.getSelected() == null && !filteredBiomes.isEmpty()) {
+            biomesList.setSelected(filteredBiomes.get(0));
+        }
+
+        appliedBiomeVersion = currentBiomeVersion;
+        appliedFilter = currentFilter;
+        appliedDimension = currentDimension;
+    }
+
     @Override
     public @NotNull Component getTabTitle() {
+        return SETTINGS_BIOMES_TITLE;
+    }
+
+    @Override
+    public Component getTabExtraNarration() {
         return SETTINGS_BIOMES_TITLE;
     }
 
@@ -217,7 +250,7 @@ public class BiomesTab implements Tab {
         int listTop = top + LINE_HEIGHT + LINE_VSPACE;
         biomesList.setPosition(left, listTop);
         biomesList.setSize(leftWidth, bottom - listTop - LINE_VSPACE);
-        biomesList.replaceEntries(filterCycleButton.getValue().apply(previewContainer.allBiomes()));
+        refreshBiomeEntriesIfNeeded(false);
 
         colorChooser.setSquareSize(screenRectangle.width() / 4);
         colorChooser.setPosition(left + leftWidth + LINE_VSPACE * 2, top + ((bottom - top) / 2) - colorChooser.getHeight() / 2);
@@ -257,21 +290,7 @@ public class BiomesTab implements Tab {
     }
 
     public enum BiomeListFilter {
-        DIMENSION(x -> {
-            LevelStem levelStem = x.previewTab().levelStemRegistry().getValue(WorldPreview.get().renderSettings().dimension);
-            if (levelStem == null) {
-                return true;
-            }
-            Set<ResourceLocation> supportedBiomes = levelStem.generator()
-                    .getBiomeSource()
-                    .possibleBiomes()
-                    .stream()
-                    .map(Holder::unwrapKey)
-                    .map(Optional::orElseThrow)
-                    .map(ResourceKey::location)
-                    .collect(Collectors.toSet());
-            return supportedBiomes.contains(x.location());
-        }),
+        DIMENSION(x -> true),
         ALL(x -> true),
         MISSING(x -> x.dataSource() == PreviewData.DataSource.MISSING),
         CUSTOM(x -> x.dataSource() == PreviewData.DataSource.CONFIG),
@@ -286,7 +305,22 @@ public class BiomesTab implements Tab {
             this.filterFn = filterFn;
         }
 
-        public List<BiomesList.BiomeEntry> apply(List<BiomesList.BiomeEntry> orig) {
+        public List<BiomesList.BiomeEntry> apply(PreviewContainer previewContainer, List<BiomesList.BiomeEntry> orig) {
+            if (this == DIMENSION) {
+                LevelStem levelStem = previewContainer.levelStemRegistry().getValue(WorldPreview.get().renderSettings().dimension);
+                if (levelStem == null) {
+                    return orig;
+                }
+                Set<Identifier> supportedBiomes = levelStem.generator()
+                        .getBiomeSource()
+                        .possibleBiomes()
+                        .stream()
+                        .map(Holder::unwrapKey)
+                        .map(Optional::orElseThrow)
+                        .map(ResourceKey::identifier)
+                        .collect(Collectors.toSet());
+                return orig.stream().filter(x -> supportedBiomes.contains(x.location())).toList();
+            }
             return orig.stream().filter(filterFn).toList();
         }
 

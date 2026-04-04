@@ -5,6 +5,7 @@ import caeruleusTait.world.preview.client.gui.widgets.OldStyleImageButton;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
@@ -37,7 +38,7 @@ public class SeedsList extends BaseObjectSelectionList<SeedsList.SeedEntry> {
             this.deleteButton = new OldStyleImageButton(
                     0, 0, 20, 20, /* x, y, width, height */
                     40, 20, 20, /* xTexStart, yTexStart, yDiffTex */
-                    BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                    BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                     this::deleteEntry
             );
             this.deleteButton.active = seedCanChange;
@@ -53,21 +54,22 @@ public class SeedsList extends BaseObjectSelectionList<SeedsList.SeedEntry> {
         }
 
         @Override
-        public void render(GuiGraphics guiGraphics, int index, int top, int left, int width, int height, int mouseX, int mouseY, boolean bl, float partialTick) {
-            guiGraphics.drawString(seedsList.minecraft.font, seed, left + 4, top + 6, seedCanChange ? 0xFFFFFF : 0x999999);
-            deleteButton.setPosition(seedsList.getRowRight() - 22, top);
+        public void renderContent(GuiGraphics guiGraphics, int mouseX, int mouseY, boolean isHovering, float partialTick) {
+            guiGraphics.drawString(seedsList.minecraft.font, seed, getContentX() + 2, getContentY() + 2, seedCanChange ? 0xFFFFFFFF : 0xFF999999);
+            deleteButton.setPosition(getX() + getWidth() - 22, getY());
             deleteButton.render(guiGraphics, mouseX, mouseY, partialTick);
         }
 
+
         @Override
-        public boolean mouseClicked(double d, double e, int i) {
+        public boolean mouseClicked(MouseButtonEvent event, boolean isDoubleClick) {
             if (!seedCanChange) {
                 return true;
             }
-            if (deleteButton.isHovered()) {
-                deleteButton.mouseClicked(d, e, i);
+            if (deleteButton.isMouseOver(event.x(), event.y())) {
+                deleteButton.mouseClicked(event, isDoubleClick);
             }
-            if (i == 0 && d < seedsList.getRowRight() - 22) {
+            if (event.button() == 0 && event.x() < seedsList.getRowRight() - 22) {
                 seedsList.setSelected(this);
                 seedsList.previewContainer.setSeed(seed);
                 minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));

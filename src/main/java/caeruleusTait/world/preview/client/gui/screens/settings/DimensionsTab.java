@@ -9,9 +9,10 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.tabs.Tab;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
 import org.jetbrains.annotations.NotNull;
 
@@ -30,7 +31,7 @@ public class DimensionsTab implements Tab {
     private final WGLabel headLabel;
     private final DimensionList dimensionList;
 
-    public DimensionsTab(Minecraft minecraft, List<ResourceLocation> levelStemKeys) {
+    public DimensionsTab(Minecraft minecraft, List<Identifier> levelStemKeys) {
         this.minecraft = minecraft;
         this.renderSettings = WorldPreview.get().renderSettings();
 
@@ -42,6 +43,11 @@ public class DimensionsTab implements Tab {
 
     @Override
     public @NotNull Component getTabTitle() {
+        return SETTINGS_DIM_TITLE;
+    }
+
+    @Override
+    public @NotNull Component getTabExtraNarration() {
         return SETTINGS_DIM_TITLE;
     }
 
@@ -72,11 +78,11 @@ public class DimensionsTab implements Tab {
             super(minecraft, width, height, x, y, 16);
         }
 
-        public DimensionEntry entryFactory(ResourceLocation dimensionKey) {
+        public DimensionEntry entryFactory(Identifier dimensionKey) {
             return new DimensionEntry(dimensionKey);
         }
 
-        public void select(ResourceLocation dimensionKey) {
+        public void select(Identifier dimensionKey) {
             for (DimensionEntry entry : children()) {
                 if (entry.dimensionKey.equals(dimensionKey)) {
                     setSelected(entry);
@@ -87,10 +93,10 @@ public class DimensionsTab implements Tab {
         }
 
         public class DimensionEntry extends BaseObjectSelectionList.Entry<DimensionEntry> {
-            private final ResourceLocation dimensionKey;
+            private final Identifier dimensionKey;
             private final Component component;
 
-            public DimensionEntry(ResourceLocation dimensionKey) {
+            public DimensionEntry(Identifier dimensionKey) {
                 this.dimensionKey = dimensionKey;
                 this.component = Component.literal(dimensionKey.toString());
             }
@@ -101,24 +107,14 @@ public class DimensionsTab implements Tab {
             }
 
             @Override
-            public void render(
-                    GuiGraphics guiGraphics,
-                    int index,
-                    int top,
-                    int left,
-                    int width,
-                    int height,
-                    int mouseX,
-                    int mouseY,
-                    boolean bl,
-                    float partialTick
-            ) {
-                guiGraphics.drawString(minecraft.font, component, left + 5, top + 2, 16777215);
+            public void renderContent(GuiGraphics guiGraphics, int mouseX, int mouseY, boolean isHovering, float partialTick) {
+                guiGraphics.drawString(minecraft.font, component, getContentX() + 1, getContentY(), 0xFFFFFFFF);
             }
 
+
             @Override
-            public boolean mouseClicked(double d, double e, int i) {
-                if (i != 0) {
+            public boolean mouseClicked(MouseButtonEvent event, boolean isDoubleClick) {
+                if (event.button() != 0) {
                     return false;
                 }
 

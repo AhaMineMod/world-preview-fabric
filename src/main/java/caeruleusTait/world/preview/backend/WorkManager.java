@@ -61,7 +61,6 @@ public class WorkManager {
     private LevelStem levelStem;
     private DimensionType dimensionType;
     private ChunkGenerator chunkGenerator;
-    private BiomeSource biomeSource;
     private ChunkSampler chunkSampler;
     private SampleUtils sampleUtils;
 
@@ -107,7 +106,7 @@ public class WorkManager {
         levelStem = _levelStem;
         dimensionType = levelStem.type().value();
         chunkGenerator = levelStem.generator();
-        biomeSource = chunkGenerator.getBiomeSource();
+        final BiomeSource biomeSource = chunkGenerator.getBiomeSource();
         previewStorageCacheManager = _previewStorageCacheManager;
         chunkSampler = renderSettings.samplerType.create(renderSettings.quartStride());
         previewData = _previewData;
@@ -195,7 +194,10 @@ public class WorkManager {
         }
 
         if (previewStorageCacheManager != null) {
-            previewStorageCacheManager.storePreviewStorage(worldOptions.seed(), previewStorage);
+            final PreviewStorageCacheManager cacheManager = previewStorageCacheManager;
+            final PreviewStorage storage = previewStorage;
+            final long seed = worldOptions.seed();
+            cacheManager.storePreviewStorageAsync(seed, storage);
         }
 
         worldOptions = null;
@@ -215,10 +217,7 @@ public class WorkManager {
     }
 
     private boolean requeueOnYOnlyChange() {
-        if (config.buildFullVertChunk) {
-            return false;
-        }
-        return true;
+        return !config.buildFullVertChunk;
     }
 
     public void queueRange(BlockPos topLeftBlock, BlockPos bottomRightBlock) {
@@ -258,7 +257,7 @@ public class WorkManager {
         try {
             queueRangeReal(topLeftBlock, bottomRightBlock);
         } catch (Throwable e) {
-            e.printStackTrace();
+            LOGGER.error("Unhandled error while queueing preview range", e);
         } finally {
             queueIsRunning = false;
         }
@@ -297,36 +296,21 @@ public class WorkManager {
             units += queueForLevel(chunks, 0, 256, (pos, y) -> new StructStartWorkUnit(sampleUtils, pos, previewData));
         }
 
+        final int sectionSizeExponent = PreviewSection.SHIFT - PreviewSection.QUART_TO_SECTION_SHIFT;
+        final int numChunksPerSection = PreviewSection.SECTION_SIZE >> (sectionSizeExponent - 4);
+
         // Height map
         if (config.sampleHeightmap && !shouldEarlyAbortQueuing && sampleUtils.noiseGeneratorSettings() != null) {
-            LongSet queuedChunks = new LongOpenHashSet(chunks.size());
-            List<ChunkPos> heightMapChunks = new ArrayList<>(chunks.size());
-            final int sectionSizeExponent = PreviewSection.SHIFT - PreviewSection.QUART_TO_SECTION_SHIFT;
-            final int numChunks = PreviewSection.SECTION_SIZE >> (sectionSizeExponent - 4);
-            for (ChunkPos c : chunks) {
-                ChunkPos shifted = new ChunkPos((c.x >> 4) << 4, (c.z >> 4) << 4);
-                if (queuedChunks.add(shifted.toLong())) {
-                    heightMapChunks.add(shifted);
-                }
-            }
-            units += queueForLevel(heightMapChunks, 0, 1, (pos, y) -> new HeightmapWorkUnit(chunkSampler, sampleUtils, pos, numChunks, previewData));
+            List<ChunkPos> heightMapChunks = uniqueSectionAlignedChunks(chunks);
+            units += queueForLevel(heightMapChunks, 0, 1, (pos, y) -> new HeightmapWorkUnit(chunkSampler, sampleUtils, pos, numChunksPerSection, previewData));
         } else if (config.sampleHeightmap && !shouldEarlyAbortQueuing) {
             units += queueForLevel(chunks, 0, 64, (pos, y) -> new SlowHeightmapWorkUnit(chunkSampler, sampleUtils, pos, previewData));
         }
 
         // Intersections
         if (config.sampleIntersections && !shouldEarlyAbortQueuing && sampleUtils.noiseGeneratorSettings() != null) {
-            LongSet queuedChunks = new LongOpenHashSet(chunks.size());
-            List<ChunkPos> intersectChunks = new ArrayList<>(chunks.size());
-            final int sectionSizeExponent = PreviewSection.SHIFT - PreviewSection.QUART_TO_SECTION_SHIFT;
-            final int numChunks = PreviewSection.SECTION_SIZE >> (sectionSizeExponent - 4);
-            for (ChunkPos c : chunks) {
-                ChunkPos shifted = new ChunkPos((c.x >> 4) << 4, (c.z >> 4) << 4);
-                if (queuedChunks.add(shifted.toLong())) {
-                    intersectChunks.add(shifted);
-                }
-            }
-            units += queueForLevel(intersectChunks, 0, 1, (pos, y) -> new IntersectionWorkUnit(chunkSampler, sampleUtils, pos, numChunks, previewData, Y_BLOCK_STRIDE));
+            List<ChunkPos> intersectChunks = uniqueSectionAlignedChunks(chunks);
+            units += queueForLevel(intersectChunks, 0, 1, (pos, y) -> new IntersectionWorkUnit(chunkSampler, sampleUtils, pos, numChunksPerSection, previewData, Y_BLOCK_STRIDE));
         } else if (config.sampleIntersections && !shouldEarlyAbortQueuing) {
             units += queueForLevel(chunks, 0, 64, (pos, y) -> new SlowIntersectionWorkUnit(chunkSampler, sampleUtils, pos, previewData, yMin(), yMax(), Y_BLOCK_STRIDE));
         }
@@ -392,7 +376,7 @@ public class WorkManager {
         }
 
         // Batch to reduce threading overhead
-        int batchSize = maxBatchSize == 1 ? 1 : Math.max(8, Math.min(maxBatchSize, size / 4096));
+        int batchSize = maxBatchSize == 1 ? 1 : Math.clamp(size / 4096, 8, maxBatchSize);
         WorkBatch[] batches = new WorkBatch[batchSize == 1 ? size : (size / batchSize) + 1];
         if (batchSize > 1) {
             int batchIdx = 0;
@@ -420,6 +404,18 @@ public class WorkManager {
         }
 
         return size;
+    }
+
+    private List<ChunkPos> uniqueSectionAlignedChunks(List<ChunkPos> chunks) {
+        LongSet queuedChunks = new LongOpenHashSet(chunks.size());
+        List<ChunkPos> alignedChunks = new ArrayList<>(chunks.size());
+        for (ChunkPos chunkPos : chunks) {
+            ChunkPos shifted = new ChunkPos((chunkPos.x >> 4) << 4, (chunkPos.z >> 4) << 4);
+            if (queuedChunks.add(shifted.toLong())) {
+                alignedChunks.add(shifted);
+            }
+        }
+        return alignedChunks;
     }
 
     private List<Integer> genAdjacentYLevels(int y) {

@@ -17,9 +17,11 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.components.tabs.Tab;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
 import org.jetbrains.annotations.NotNull;
 
@@ -138,6 +140,11 @@ public class HeightmapTab implements Tab {
     }
 
     @Override
+    public @NotNull Component getTabExtraNarration() {
+        return SETTINGS_HEIGHTMAP_TITLE;
+    }
+
+    @Override
     public void visitChildren(Consumer<AbstractWidget> consumer) {
         toRender.forEach(consumer);
     }
@@ -241,24 +248,12 @@ public class HeightmapTab implements Tab {
             }
 
             @Override
-            public void render(
-                    GuiGraphics guiGraphics,
-                    int index,
-                    int top,
-                    int left,
-                    int width,
-                    int height,
-                    int mouseX,
-
-                    int mouseY,
-                    boolean bl,
-                    float partialTick
-            ) {
-                guiGraphics.drawString(minecraft.font, displayString, left + 4, top + 2, 0xFFFFFF);
+            public void renderContent(GuiGraphics guiGraphics, int mouseX, int mouseY, boolean isHovering, float partialTick) {
+                guiGraphics.drawString(minecraft.font, displayString, getContentX() + 2, getContentY(), 0xFFFFFFFF);
             }
 
             @Override
-            public boolean mouseClicked(double mouseX, double mouseY, int button) {
+            public boolean mouseClicked(MouseButtonEvent event, boolean isDoubleClick) {
                 minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
                 onClick.accept(this);
                 return true;
@@ -283,6 +278,7 @@ public class HeightmapTab implements Tab {
 
             private final NativeImage colormapImg;
             private final DynamicTexture colormapTexture;
+            private final Identifier colormapTextureId;
 
             public ColormapEntry(ColorMap colorMap, Consumer<ColormapEntry> onClick) {
                 this.name = colorMap.name();
@@ -290,7 +286,10 @@ public class HeightmapTab implements Tab {
                 this.onClick = onClick;
 
                 this.colormapImg = new NativeImage(NativeImage.Format.RGBA, 1024, 1, true);
-                this.colormapTexture = new DynamicTexture(this.colormapImg);
+                this.colormapTexture = new DynamicTexture(() -> "world_preview:colormap_" + this.name, this.colormapImg);
+                String texturePath = this.name.toLowerCase().replaceAll("[^a-z0-9/._-]", "_");
+                this.colormapTextureId = Identifier.tryBuild("world_preview", "dynamic/colormap/" + texturePath);
+                minecraft.getTextureManager().register(this.colormapTextureId, this.colormapTexture);
 
                 for (int i = 0; i < 1024; ++i) {
                     this.colormapImg.setPixel(i, 0, colorMap.getARGB((float)i / 1024f));
@@ -304,27 +303,19 @@ public class HeightmapTab implements Tab {
             }
 
             @Override
-            public void render(
-                    GuiGraphics guiGraphics,
-                    int index,
-                    int top,
-                    int left,
-                    int width,
-                    int height,
-                    int mouseX,
-
-                    int mouseY,
-                    boolean bl,
-                    float partialTick
-            ) {
-                guiGraphics.drawString(minecraft.font, name, left + 4, top + 2, 0xFFFFFF);
+            public void renderContent(GuiGraphics guiGraphics, int mouseX, int mouseY, boolean isHovering, float partialTick) {
+                final int top = getY();
+                final int left = getX();
+                final int width = getWidth();
+                final int height = getHeight();
+                guiGraphics.drawString(minecraft.font, name, left + 4, top + 2, 0xFFFFFFFF);
 
                 final int xMin = left + 5;
                 final int yMin = top + 14;
                 final int xMax = left + width - 5;
                 final int yMax = top + height - 3;
 
-                WorldPreviewClient.renderTexture(colormapTexture, xMin, yMin, xMax, yMax);
+                WorldPreviewClient.renderTexture(guiGraphics, colormapTextureId, xMin, yMin, xMax, yMax);
 
                 final int colorBorder = 0xFF999999;
 
@@ -336,7 +327,7 @@ public class HeightmapTab implements Tab {
             }
 
             @Override
-            public boolean mouseClicked(double mouseX, double mouseY, int button) {
+            public boolean mouseClicked(MouseButtonEvent event, boolean isDoubleClick) {
                 minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
                 onClick.accept(this);
                 return true;

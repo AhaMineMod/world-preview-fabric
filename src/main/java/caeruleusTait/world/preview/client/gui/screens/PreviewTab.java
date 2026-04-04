@@ -22,6 +22,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.server.WorldLoader;
 import net.minecraft.server.packs.repository.PackRepository;
+import net.minecraft.server.permissions.LevelBasedPermissionSet;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.WorldDimensions;
@@ -65,6 +66,11 @@ public class PreviewTab implements Tab, AutoCloseable, PreviewContainerDataProvi
     }
 
     @Override
+    public @NotNull Component getTabExtraNarration() {
+        return TITLE;
+    }
+
+    @Override
     public void visitChildren(Consumer<AbstractWidget> consumer) {
         previewContainer.widgets().forEach(consumer);
     }
@@ -93,7 +99,11 @@ public class PreviewTab implements Tab, AutoCloseable, PreviewContainerDataProvi
 
         PackRepository packRepository = ((CreateWorldScreenAccessor) createWorldScreen).invokeGetDataPackSelectionSettings(worldDataConfiguration).getSecond();
         WorldLoader.PackConfig packConfig = new WorldLoader.PackConfig(packRepository, worldDataConfiguration, false, true);
-        WorldLoader.InitConfig initConfig = new WorldLoader.InitConfig(packConfig, Commands.CommandSelection.INTEGRATED, 2);
+        WorldLoader.InitConfig initConfig = new WorldLoader.InitConfig(
+                packConfig,
+                Commands.CommandSelection.INTEGRATED,
+                LevelBasedPermissionSet.ADMIN
+        );
         CompletableFuture<WorldCreationContext> completableFuture = WorldLoader.load(
                 initConfig,
                 dataLoadContext -> {
@@ -145,9 +155,7 @@ public class PreviewTab implements Tab, AutoCloseable, PreviewContainerDataProvi
         if (!worldPreview.cfg().cacheInNew) {
             return;
         }
-        minecraft.forceSetScreen(new PreviewCacheLoadingScreen(SAVING_PREVIEW));
-        writeCacheFile(previewContainer.workManager().previewStorage(), cacheDir().resolve(filename(seed)));
-        minecraft.forceSetScreen(createWorldScreen);
+        writeCacheFile(storage, cacheDir().resolve(filename(seed)));
     }
 
     @Override
@@ -156,9 +164,9 @@ public class PreviewTab implements Tab, AutoCloseable, PreviewContainerDataProvi
             return new PreviewStorage(yMin, yMax);
         }
 
-        minecraft.forceSetScreen(new PreviewCacheLoadingScreen(LOADING_PREVIEW));
+        minecraft.setScreen(new PreviewCacheLoadingScreen(LOADING_PREVIEW));
         final PreviewStorage res = readCacheFile(yMin, yMax, cacheDir().resolve(filename(seed)));
-        minecraft.forceSetScreen(createWorldScreen);
+        minecraft.setScreen(createWorldScreen);
         return res;
     }
 

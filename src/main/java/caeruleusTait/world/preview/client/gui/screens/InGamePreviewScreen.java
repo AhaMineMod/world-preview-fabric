@@ -10,7 +10,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.WorldCreationContext;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.core.LayeredRegistryAccess;
 import net.minecraft.core.Registry;
@@ -30,7 +30,6 @@ import java.nio.file.Path;
 import java.security.InvalidParameterException;
 
 import static caeruleusTait.world.preview.client.WorldPreviewComponents.LOADING_PREVIEW;
-import static caeruleusTait.world.preview.client.WorldPreviewComponents.SAVING_PREVIEW;
 
 public class InGamePreviewScreen extends Screen implements PreviewContainerDataProvider {
 
@@ -72,7 +71,7 @@ public class InGamePreviewScreen extends Screen implements PreviewContainerDataP
         super.render(guiGraphics, mouseX, mouseY, partialTick);
 
         guiGraphics.drawCenteredString(minecraft.font, WorldPreviewComponents.TITLE_FULL, width / 2, 6, 0xFFFFFF);
-        guiGraphics.blit(RenderType::guiTextured, FOOTER_SEPARATOR, 0, Mth.roundToward(this.height - 30, 2), 0.0F, 0.0F, this.width, 2, 32, 2);
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, FOOTER_SEPARATOR, 0, Mth.roundToward(this.height - 30, 2), 0.0F, 0.0F, this.width, 2, 32, 2);
     }
 
     @Override
@@ -99,8 +98,7 @@ public class InGamePreviewScreen extends Screen implements PreviewContainerDataP
         if (!worldPreview.cfg().cacheInGame) {
             return;
         }
-        minecraft.forceSetScreen(new PreviewCacheLoadingScreen(SAVING_PREVIEW));
-        writeCacheFile(previewContainer.workManager().previewStorage(), cacheDir().resolve(filename()));
+        writeCacheFile(storage, cacheDir().resolve(filename()));
     }
 
     @Override
@@ -109,9 +107,9 @@ public class InGamePreviewScreen extends Screen implements PreviewContainerDataP
             return new PreviewStorage(yMin, yMax);
         }
 
-        minecraft.forceSetScreen(new PreviewCacheLoadingScreen(LOADING_PREVIEW));
+        minecraft.setScreen(new PreviewCacheLoadingScreen(LOADING_PREVIEW));
         final PreviewStorage res = readCacheFile(yMin, yMax, cacheDir().resolve(filename()));
-        minecraft.forceSetScreen(this);
+        minecraft.setScreen(this);
         return res;
     }
 

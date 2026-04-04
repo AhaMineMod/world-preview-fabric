@@ -29,12 +29,13 @@ import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.worldselection.WorldCreationContext;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.LayeredRegistryAccess;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.packs.resources.Resource;
@@ -78,13 +79,13 @@ import static caeruleusTait.world.preview.client.WorldPreviewComponents.*;
 
 public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvider {
 
-    public static final TagKey<Biome> C_CAVE = TagKey.create(Registries.BIOME, ResourceLocation.fromNamespaceAndPath("c", "caves"));
-    public static final TagKey<Biome> C_IS_CAVE = TagKey.create(Registries.BIOME, ResourceLocation.fromNamespaceAndPath("c", "is_cave"));
-    public static final TagKey<Biome> FORGE_CAVE = TagKey.create(Registries.BIOME, ResourceLocation.fromNamespaceAndPath("forge", "caves"));
-    public static final TagKey<Biome> FORGE_IS_CAVE = TagKey.create(Registries.BIOME, ResourceLocation.fromNamespaceAndPath("forge", "is_cave"));
-    public static final TagKey<Structure> DISPLAY_BY_DEFAULT = TagKey.create(Registries.STRUCTURE, ResourceLocation.fromNamespaceAndPath("c", "display_on_map_by_default"));
+    public static final TagKey<Biome> C_CAVE = TagKey.create(Registries.BIOME, Identifier.fromNamespaceAndPath("c", "caves"));
+    public static final TagKey<Biome> C_IS_CAVE = TagKey.create(Registries.BIOME, Identifier.fromNamespaceAndPath("c", "is_cave"));
+    public static final TagKey<Biome> FORGE_CAVE = TagKey.create(Registries.BIOME, Identifier.fromNamespaceAndPath("forge", "caves"));
+    public static final TagKey<Biome> FORGE_IS_CAVE = TagKey.create(Registries.BIOME, Identifier.fromNamespaceAndPath("forge", "is_cave"));
+    public static final TagKey<Structure> DISPLAY_BY_DEFAULT = TagKey.create(Registries.STRUCTURE, Identifier.fromNamespaceAndPath("c", "display_on_map_by_default"));
 
-    public static final ResourceLocation BUTTONS_TEXTURE = ResourceLocation.parse("world_preview:textures/gui/buttons.png");
+    public static final Identifier BUTTONS_TEXTURE = Identifier.parse("world_preview:textures/gui/buttons.png");
     public static final int BUTTONS_TEX_WIDTH = 400;
     public static final int BUTTONS_TEX_HEIGHT = 60;
 
@@ -100,7 +101,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
     private final PreviewMappingData previewMappingData;
     private PreviewData previewData;
 
-    private List<ResourceLocation> levelStemKeys;
+    private List<Identifier> levelStemKeys;
     private Registry<LevelStem> levelStemRegistry;
 
     private final EditBox seedEdit;
@@ -125,6 +126,9 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
     private final StructuresList structuresList;
     private final SeedsList seedsList;
     private BiomesList.BiomeEntry[] allBiomes;
+    private int allBiomesVersion = 0;
+    private int sortedAllBiomesVersion = -1;
+    private List<BiomesList.BiomeEntry> sortedAllBiomes = List.of();
     private StructuresList.StructureEntry[] allStructures;
     private NativeImage[] allStructureIcons;
     private NativeImage playerIcon;
@@ -164,7 +168,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         randomSeedButton = new OldStyleImageButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 0, 20, 20, /* xTexStart, yTexStart, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 this::randomizeSeed
         );
         randomSeedButton.setTooltip(Tooltip.create(BTN_RANDOM));
@@ -174,7 +178,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         saveSeed = new OldStyleImageButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 20, 20, 20, /* xTexStart, yTexStart, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 this::saveCurrentSeed
         );
         saveSeed.setTooltip(Tooltip.create(BTN_SAVE_SEED));
@@ -184,7 +188,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         settings = new OldStyleImageButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 60, 20, 20, /* xTexStart, yTexStart, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> {
                     workManager.cancel();
                     minecraft.setScreen(new SettingsScreen(screen, this));
@@ -197,7 +201,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         resetToZeroZero = new OldStyleImageButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 120, 20, 20, /* xTexStart, yTexStart, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> renderSettings.resetCenter()
         );
         resetToZeroZero.setTooltip(Tooltip.create(BTN_HOME));
@@ -240,7 +244,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toggleCaves = new ToggleButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 80, 20, 20, 20, /* xTexStart, yTexStart, xDiffTex, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> {
                     biomesList.setSelected(null);
                     previewDisplay.setSelectedBiomeId((short) -1);
@@ -253,7 +257,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toggleShowStructures = new ToggleButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 140, 20, 20, 20, /* xTexStart, yTexStart, xDiffTex, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> renderSettings.hideAllStructures = !((ToggleButton) x).selected
         );
         toggleShowStructures.selected = !renderSettings.hideAllStructures;
@@ -263,7 +267,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toggleBiomes = new ToggleButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 360, 20, 20, 20, /* xTexStart, yTexStart, xDiffTex, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> selectViewMode(BIOMES)
         );
         toggleBiomes.visible = false;
@@ -274,7 +278,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toggleNoise = new ToggleButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 280, 20, 20, 20, /* xTexStart, yTexStart, xDiffTex, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> selectViewMode(renderSettings.lastNoise)
         );
         toggleNoise.visible = false;
@@ -285,7 +289,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toggleHeightmap = new ToggleButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 200, 20, 20, 20, /* xTexStart, yTexStart, xDiffTex, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> selectViewMode(HEIGHTMAP)
         );
         toggleHeightmap.visible = false;
@@ -295,7 +299,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toggleIntersections = new ToggleButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 240, 20, 20, 20, /* xTexStart, yTexStart, xDiffTex, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> selectViewMode(INTERSECTIONS)
         );
         toggleIntersections.active = false;
@@ -303,9 +307,8 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toRender.add(toggleIntersections);
 
         noiseCycleButton = CycleButton
-                .builder(RenderSettings.RenderMode::toComponent)
+                .builder(RenderSettings.RenderMode::toComponent, renderSettings.lastNoise)
                 .withValues(List.of(NOISE_TEMPERATURE, NOISE_HUMIDITY, NOISE_DEPTH, NOISE_CONTINENTALNESS, NOISE_WEIRDNESS, NOISE_EROSION, NOISE_PEAKS_AND_VALLEYS))
-                .withInitialValue(renderSettings.lastNoise)
                 .create(0, 0, 200, 20, BTN_CYCLE_NOISE, (btn, val) -> selectViewMode(val));
         noiseCycleButton.active = false;
         noiseCycleButton.visible = false;
@@ -314,7 +317,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         toggleExpand = new ToggleButton(
                 0, 0, 20, 20, /* x, y, width, height */
                 320, 20, 20, 20, /* xTexStart, yTexStart, xDiffTex, yDiffTex */
-                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* resourceLocation, textureWidth, textureHeight*/
+                BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
                 x -> {
                     final boolean expanded = ((ToggleButton) x).selected;
                     toggleBiomes.visible = expanded;
@@ -341,7 +344,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
 
 
     public void patchColorData() {
-        Map<ResourceLocation, PreviewMappingData.ColorEntry> configured = Arrays.stream(allBiomes)
+        Map<Identifier, PreviewMappingData.ColorEntry> configured = Arrays.stream(allBiomes)
                 .filter(x -> x.dataSource() == PreviewData.DataSource.CONFIG)
                 .collect(
                         Collectors.toMap(
@@ -350,7 +353,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
                         )
                 );
 
-        Map<ResourceLocation, PreviewMappingData.ColorEntry> defaults = Arrays.stream(allBiomes)
+        Map<Identifier, PreviewMappingData.ColorEntry> defaults = Arrays.stream(allBiomes)
                 .filter(x -> x.dataSource() == PreviewData.DataSource.RESOURCE)
                 .collect(
                         Collectors.toMap(
@@ -359,7 +362,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
                         )
                 );
 
-        Map<ResourceLocation, PreviewMappingData.ColorEntry> missing = Arrays.stream(allBiomes)
+        Map<Identifier, PreviewMappingData.ColorEntry> missing = Arrays.stream(allBiomes)
                 .filter(x -> x.dataSource() == PreviewData.DataSource.MISSING)
                 .collect(
                         Collectors.toMap(
@@ -471,18 +474,18 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
 
         if (renderSettings.dimension == null || !levelStemRegistry.containsKey(renderSettings.dimension)) {
             if (levelStemRegistry.containsKey(LevelStem.OVERWORLD)) {
-                renderSettings.dimension = LevelStem.OVERWORLD.location();
+                renderSettings.dimension = LevelStem.OVERWORLD.identifier();
             } else {
                 renderSettings.dimension = levelStemRegistry.keySet().iterator().next();
             }
         }
         LevelStem levelStem = levelStemRegistry.getValue(renderSettings.dimension);
 
-        Set<ResourceLocation> caveBiomes = new HashSet<>();
+        Set<Identifier> caveBiomes = new HashSet<>();
         for (TagKey<Biome> tagKey : List.of(C_CAVE, C_IS_CAVE, FORGE_CAVE, FORGE_IS_CAVE)) {
             caveBiomes.addAll(
                     StreamSupport.stream(biomeRegistry.getTagOrEmpty(tagKey).spliterator(), false)
-                            .map(x -> x.unwrapKey().orElseThrow().location())
+                            .map(x -> x.unwrapKey().orElseThrow().identifier())
                             .toList()
             );
         }
@@ -492,7 +495,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
                 caveBiomes,
                 strucutreRegistry.keySet(),
                 StreamSupport.stream(strucutreRegistry.getTagOrEmpty(DISPLAY_BY_DEFAULT).spliterator(), false)
-                        .map(x -> x.unwrapKey().orElseThrow().location())
+                        .map(x -> x.unwrapKey().orElseThrow().identifier())
                         .collect(Collectors.toSet())
         );
 
@@ -523,13 +526,13 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         List<String> missing = Arrays.stream(previewData.biomeId2BiomeData())
                 .filter(x -> x.dataSource() == PreviewData.DataSource.MISSING)
                 .map(PreviewData.BiomeData::tag)
-                .map(ResourceLocation::toString)
+                .map(Identifier::toString)
                 .toList();
         worldPreview.writeMissingColors(missing);
 
         allBiomes = biomeRegistry.entrySet().stream()
                 .map(x -> {
-                    final short id = previewData.biome2Id().getShort(x.getKey().location().toString());
+                    final short id = previewData.biome2Id().getShort(x.getKey().identifier().toString());
                     final PreviewData.BiomeData biomeData = previewData.biomeId2BiomeData()[id];
                     final int color = biomeData.color();
                     final int initialColor = biomeData.resourceOnlyColor();
@@ -537,10 +540,12 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
                     final boolean initialIsCave = biomeData.resourceOnlyIsCave();
                     final String explicitName = biomeData.name();
                     final PreviewData.DataSource dataSource = biomeData.dataSource();
-                    return biomesList.createEntry(x.getKey().location(), id, color, initialColor, isCave, initialIsCave, explicitName, dataSource);
+                    return biomesList.createEntry(x.getKey().identifier(), id, color, initialColor, isCave, initialIsCave, explicitName, dataSource);
                 })
                 .sorted(Comparator.comparing(BiomesList.BiomeEntry::id))
                 .toArray(BiomesList.BiomeEntry[]::new);
+        allBiomesVersion++;
+        sortedAllBiomesVersion = -1;
 
         biomesList.replaceEntries(new ArrayList<>());
         biomesList.setSelected(null);
@@ -549,20 +554,20 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         missing = Arrays.stream(previewData.structId2StructData())
                 .filter(x -> x.dataSource() == PreviewData.DataSource.MISSING)
                 .map(PreviewData.StructureData::tag)
-                .map(ResourceLocation::toString)
+                .map(Identifier::toString)
                 .toList();
         worldPreview.writeMissingStructures(missing);
 
         //  - Icons
         freeStructureIcons();
         ResourceManager builtinResourceManager = minecraft.getResourceManager();
-        Map<ResourceLocation, NativeImage> icons = new HashMap<>();
+        Map<Identifier, NativeImage> icons = new HashMap<>();
         allStructureIcons = new NativeImage[previewData.structId2StructData().length];
         for (int i = 0; i < previewData.structId2StructData().length; ++i) {
             PreviewData.StructureData data = previewData.structId2StructData()[i];
             allStructureIcons[i] = icons.computeIfAbsent(data.icon(), x -> {
                 if (x == null) {
-                    x = ResourceLocation.parse("world_preview:textures/structure/unknown.png");
+                    x = Identifier.parse("world_preview:textures/structure/unknown.png");
                 }
                 Optional<Resource> resource = builtinResourceManager.getResource(x);
                 if (resource.isEmpty()) {
@@ -570,7 +575,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
                 }
                 if (resource.isEmpty()) {
                     LOGGER.error("Failed to load structure icon: '{}'", x);
-                    resource = builtinResourceManager.getResource(ResourceLocation.parse("world_preview:textures/structure/unknown.png"));
+                    resource = builtinResourceManager.getResource(Identifier.parse("world_preview:textures/structure/unknown.png"));
                 }
                 if (resource.isEmpty()) {
                     LOGGER.error("FATAL ERROR LOADING: '{}' -- unable to load fallback!", x);
@@ -590,8 +595,8 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         //  - Player and spawn icon
         final Optional<Resource> playerResource;
         final Optional<Resource> spawnResource;
-        playerResource = builtinResourceManager.getResource(ResourceLocation.parse("world_preview:textures/etc/player.png"));
-        spawnResource = builtinResourceManager.getResource(ResourceLocation.parse("world_preview:textures/etc/bed.png"));
+        playerResource = builtinResourceManager.getResource(Identifier.parse("world_preview:textures/etc/player.png"));
+        spawnResource = builtinResourceManager.getResource(Identifier.parse("world_preview:textures/etc/bed.png"));
         try {
             try (InputStream inPlayer = playerResource.orElseThrow().open(); InputStream inSpawn = spawnResource.orElseThrow().open()) {
                 playerIcon = NativeImage.read(inPlayer);
@@ -607,11 +612,11 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         Registry<Item> itemRegistry = layeredRegistryAccess.compositeAccess().lookupOrThrow(Registries.ITEM);
         allStructures = strucutreRegistry.entrySet().stream()
                 .map(x -> {
-                    final short id = previewData.struct2Id().getShort(x.getKey().location().toString());
+                    final short id = previewData.struct2Id().getShort(x.getKey().identifier().toString());
                     final PreviewData.StructureData structureData = previewData.structId2StructData()[id];
                     return structuresList.createEntry(
                             id,
-                            x.getKey().location(),
+                            x.getKey().identifier(),
                             allStructureIcons[id],
                             structureData.item() == null ? null : itemRegistry.getValue(structureData.item()),
                             structureData.name(),
@@ -918,10 +923,18 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
     }
 
     public List<BiomesList.BiomeEntry> allBiomes() {
-        return Arrays.stream(allBiomes).sorted(Comparator.comparing(BiomesList.BiomeEntry::name)).toList();
+        if (sortedAllBiomesVersion != allBiomesVersion) {
+            sortedAllBiomes = Arrays.stream(allBiomes).sorted(Comparator.comparing(BiomesList.BiomeEntry::name)).toList();
+            sortedAllBiomesVersion = allBiomesVersion;
+        }
+        return sortedAllBiomes;
     }
 
-    public List<ResourceLocation> levelStemKeys() {
+    public int allBiomesVersion() {
+        return allBiomesVersion;
+    }
+
+    public List<Identifier> levelStemKeys() {
         return levelStemKeys;
     }
 
@@ -1032,12 +1045,14 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
             return new PlayerData(null, null);
         }
         ResourceKey<Level> playerDimension = player.level().dimension();
-        ResourceKey<Level> respawnDimension = player.getRespawnDimension();
+        ServerPlayer.RespawnConfig respawnConfig = player.getRespawnConfig();
+        ResourceKey<Level> respawnDimension = respawnConfig == null ? Level.OVERWORLD : respawnConfig.respawnData().dimension();
+        BlockPos respawnPos = respawnConfig == null ? null : respawnConfig.respawnData().pos();
         ResourceKey<Level> currentDimension = workManager.sampleUtils().dimension();
 
         return new PlayerData(
                 currentDimension.equals(playerDimension) ? player.blockPosition() : null,
-                currentDimension.equals(respawnDimension) ? player.getRespawnPosition() : null
+                currentDimension.equals(respawnDimension) ? respawnPos : null
         );
     }
 

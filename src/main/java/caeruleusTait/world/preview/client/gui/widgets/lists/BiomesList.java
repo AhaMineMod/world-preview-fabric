@@ -3,13 +3,15 @@ package caeruleusTait.world.preview.client.gui.widgets.lists;
 import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.client.WorldPreviewClient;
 import caeruleusTait.world.preview.client.gui.screens.PreviewContainer;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.locale.Language;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -30,7 +32,7 @@ public class BiomesList extends BaseObjectSelectionList<BiomesList.BiomeEntry> {
         this.previewContainer = previewContainer;
     }
 
-    public BiomeEntry createEntry(ResourceLocation location, short id, int color, int initialColor, boolean isCave, boolean initialIsCave, String explicitName, PreviewData.DataSource dataSource) {
+    public BiomeEntry createEntry(Identifier location, short id, int color, int initialColor, boolean isCave, boolean initialIsCave, String explicitName, PreviewData.DataSource dataSource) {
         return new BiomeEntry(location, id, color, initialColor, isCave, initialIsCave, explicitName, dataSource);
     }
 
@@ -66,7 +68,7 @@ public class BiomesList extends BaseObjectSelectionList<BiomesList.BiomeEntry> {
         }
 
         // If we have more than one page, make sure we don't let the scrollbar run away
-        double maxScroll = Math.max(0.0, super.getItemCount() * super.itemHeight - super.height);
+        double maxScroll = Math.max(0.0, super.contentHeight() - super.height);
         if(super.scrollAmount() > maxScroll) {
             // Make sure that the top entry is visible
             super.setScrollAmount(maxScroll);
@@ -80,13 +82,13 @@ public class BiomesList extends BaseObjectSelectionList<BiomesList.BiomeEntry> {
         private boolean isCave;
         private final int initialColor;
         private final boolean initialIsCave;
-        private final ResourceLocation location;
+        private final Identifier location;
         private PreviewData.DataSource dataSource;
         private final Tooltip tooltip;
         private final PreviewData.DataSource initialDataSource;
         private final boolean isPrimaryNamespace;
 
-        public BiomeEntry(ResourceLocation location, short id, int color, int initialColor, boolean isCave, boolean initialIsCave, String explicitName, PreviewData.DataSource dataSource) {
+        public BiomeEntry(Identifier location, short id, int color, int initialColor, boolean isCave, boolean initialIsCave, String explicitName, PreviewData.DataSource dataSource) {
             this.location = location;
             this.id = id;
             this.color = color;
@@ -117,7 +119,7 @@ public class BiomesList extends BaseObjectSelectionList<BiomesList.BiomeEntry> {
             return Component.translatable("world_preview.settings.biomes.source." + dataSource.name());
         }
 
-        public ResourceLocation location() {
+        public Identifier location() {
             return location;
         }
 
@@ -166,19 +168,31 @@ public class BiomesList extends BaseObjectSelectionList<BiomesList.BiomeEntry> {
             return Component.translatable("narrator.select", this.name);
         }
 
-        @Override
-        public void render(@NotNull GuiGraphics guiGraphics, int i, int j, int k, int l, int m, int n, int o, boolean bl, float f) {
-            if (bl) {
-                guiGraphics.fill(k, j, k + l, j + m, 0x80FFFFFF);
-            }
-            guiGraphics.fill(k + 3, j + 1, k + 13, j + 11, nativeColor(color));
-            String formatName = isPrimaryNamespace ? name : "§o" + name;
-            guiGraphics.drawString(BiomesList.this.minecraft.font, formatName, k + 16, j + 2, 0xFFFFFF);
-        }
+//        @Override
+//        public void render(@NotNull GuiGraphics guiGraphics, int i, int j, int k, int l, int m, int n, int o, boolean bl, float f) {
+//            if (bl) {
+//                guiGraphics.fill(k, j, k + l, j + m, 0x80FFFFFF);
+//            }
+//            guiGraphics.fill(k + 3, j + 1, k + 13, j + 11, nativeColor(color));
+//            String formatName = isPrimaryNamespace ? name : "§o" + name;
+//            guiGraphics.drawString(BiomesList.this.minecraft.font, formatName, k + 16, j + 2, 0xFFFFFF);
+//        }
+
 
         @Override
-        public boolean mouseClicked(double d, double e, int i) {
-            if (i != 0) {
+        public void renderContent(GuiGraphics guiGraphics, int mouseX, int mouseY, boolean isHovering, float partialTick) {
+            final int x = getContentX();
+            final int y = getContentY();
+            guiGraphics.fill(x + 1, y + 1, x + 11, y + 11, nativeColor(color));
+            String formatName = isPrimaryNamespace ? name : "§o" + name;
+            guiGraphics.drawString(BiomesList.this.minecraft.font, formatName, x + 14, y + 2, 0xFFFFFFFF);
+        }
+
+
+
+        @Override
+        public boolean mouseClicked(MouseButtonEvent event, boolean isDoubleClick) {
+            if (event.input() != 0) {
                 return false;
             }
 
