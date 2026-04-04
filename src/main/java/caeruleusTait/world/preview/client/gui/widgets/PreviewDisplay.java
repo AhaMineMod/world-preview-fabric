@@ -10,6 +10,7 @@ import caeruleusTait.world.preview.backend.storage.PreviewStorage;
 import caeruleusTait.world.preview.client.WorldPreviewClient;
 import caeruleusTait.world.preview.client.gui.PreviewDisplayDataProvider;
 import caeruleusTait.world.preview.client.gui.widgets.lists.BiomesList;
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.NativeImage;
 import it.unimi.dsi.fastutil.shorts.Short2LongMap;
 import it.unimi.dsi.fastutil.shorts.Short2LongOpenHashMap;
@@ -31,6 +32,7 @@ import net.minecraft.world.level.levelgen.NoiseRouterData;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.material.MapColor;
 import org.jetbrains.annotations.NotNull;
+import org.lwjgl.glfw.GLFW;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -38,12 +40,17 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Queue;
 
 import static caeruleusTait.world.preview.client.WorldPreviewComponents.MSG_ERROR_SETUP_FAILED;
 import static caeruleusTait.world.preview.client.WorldPreviewComponents.MSG_PREVIEW_SETUP_LOADING;
 
 public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
+    private static final double MIN_ZOOM_FACTOR = 0.25;
+    private static final double MAX_ZOOM_FACTOR = 16.0;
+    private static final double ZOOM_SCROLL_FACTOR = 1.1;
+
     private final Minecraft minecraft;
     private final PreviewDisplayDataProvider dataProvider;
     private final WorkManager workManager;
@@ -81,6 +88,7 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private double totalDragZ = 0;
 
     private int scaleBlockPos = 1;
+    private double zoomFactor = 1.0;
 
     private StructHoverHelperCell[] hoverHelperGrid;
     private final int hoverHelperGridCellSize = 64;
@@ -299,6 +307,17 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             }
         }
 
+        final String zoomLabel = formatZoomLabel();
+        final int zoomTextWidth = minecraft.font.width(zoomLabel);
+        final int zoomBoxHeight = minecraft.font.lineHeight + 6;
+        final int zoomBoxWidth = zoomTextWidth + 8;
+        final int zoomXMax = xMax - 4;
+        final int zoomXMin = zoomXMax - zoomBoxWidth;
+        final int zoomYMax = yMax - 4;
+        final int zoomYMin = zoomYMax - zoomBoxHeight;
+        guiGraphics.fill(zoomXMin, zoomYMin, zoomXMax, zoomYMax, 0xAA000000);
+        guiGraphics.drawString(minecraft.font, zoomLabel, zoomXMin + 4, zoomYMin + 3, 0xFFFFFFFF);
+
         final Instant renderEnd = Instant.now();
         frametimes.add(Duration.between(renderStart, renderEnd).abs().toMillis());
         while (frametimes.size() > 30) {
@@ -313,14 +332,46 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
 
     private record TextureCoordinate(int x, int z) {}
 
+    private String formatZoomLabel() {
+        final double roundedZoom = Math.round(zoomFactor * 100.0) / 100.0;
+        if (Math.abs(roundedZoom - Math.rint(roundedZoom)) < 0.0001) {
+            return String.format(Locale.ROOT, "%.0fx", roundedZoom);
+        }
+        if (Math.abs((roundedZoom * 10.0) - Math.rint(roundedZoom * 10.0)) < 0.0001) {
+            return String.format(Locale.ROOT, "%.1fx", roundedZoom);
+        }
+        return String.format(Locale.ROOT, "%.2fx", roundedZoom);
+    }
+
+    private double effectiveScaleBlockPos() {
+        return scaleBlockPos / zoomFactor;
+    }
+
+    private int minBlockX(BlockPos center) {
+        return (int) Math.floor(center.getX() - (texWidth * effectiveScaleBlockPos() / 2.0) - 1.0);
+    }
+
+    private int maxBlockX(BlockPos center) {
+        return (int) Math.ceil(center.getX() + (texWidth * effectiveScaleBlockPos() / 2.0) + 1.0);
+    }
+
+    private int minBlockZ(BlockPos center) {
+        return (int) Math.floor(center.getZ() - (texHeight * effectiveScaleBlockPos() / 2.0) - 1.0);
+    }
+
+    private int maxBlockZ(BlockPos center) {
+        return (int) Math.ceil(center.getZ() + (texHeight * effectiveScaleBlockPos() / 2.0) + 1.0);
+    }
+
     private TextureCoordinate blockToTexture(BlockPos blockPos) {
         BlockPos center = center();
-        final int xMin = center.getX() - (texWidth * scaleBlockPos / 2) - 1;
-        final int zMin = center.getZ() - (texHeight * scaleBlockPos / 2) - 1;
+        final int xMin = minBlockX(center);
+        final int zMin = minBlockZ(center);
+        final double effectiveScale = effectiveScaleBlockPos();
 
         return new TextureCoordinate(
-                (((blockPos.getX() - xMin) / QuartPos.SIZE) * QuartPos.SIZE) / scaleBlockPos,
-                (((blockPos.getZ() - zMin) / QuartPos.SIZE) * QuartPos.SIZE) / scaleBlockPos
+                (int) Math.floor((blockPos.getX() - xMin) / effectiveScale),
+                (int) Math.floor((blockPos.getZ() - zMin) / effectiveScale)
         );
     }
 
@@ -332,10 +383,10 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
 
     private void queueGeneration() {
         final BlockPos center = center();
-        final int xMin = center.getX() - (texWidth * scaleBlockPos / 2) - 1;
-        final int xMax = center.getX() + (texWidth * scaleBlockPos / 2) + 1;
-        final int zMin = center.getZ() - (texHeight * scaleBlockPos / 2) - 1;
-        final int zMax = center.getZ() + (texHeight * scaleBlockPos / 2) + 1;
+        final int xMin = minBlockX(center);
+        final int xMax = maxBlockX(center);
+        final int zMin = minBlockZ(center);
+        final int zMax = maxBlockZ(center);
         final int y = center.getY();
         workManager.queueRange(new BlockPos(xMin, y, zMin), new BlockPos(xMax, y, zMax));
     }
@@ -343,35 +394,30 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private record RenderHelper(
             PreviewSection dataSection,
             PreviewSection structureSection,
-            PreviewSection.AccessData accessData,
-            int sectionStartTexX,
-            int sectionStartTexZ
+            PreviewSection.AccessData accessData
     ) {
     }
 
     private List<RenderHelper> generateRenderData() {
         final BlockPos center = center();
-        final int xMin = center.getX() - (texWidth * scaleBlockPos / 2) - 1;
-        final int zMin = center.getZ() - (texHeight * scaleBlockPos / 2) - 1;
+        final int xMin = minBlockX(center);
+        final int xMax = maxBlockX(center);
+        final int zMin = minBlockZ(center);
+        final int zMax = maxBlockZ(center);
 
-        final int quartExpand = renderSettings.quartExpand();
         final int quartStride = renderSettings.quartStride();
-
-        final int quartsInWidth = (texWidth / quartExpand) * quartStride;
-        final int quartsInHeight = (texHeight / quartExpand) * quartStride;
 
         final int minQuartX = QuartPos.fromBlock(xMin);
         final int minQuartZ = QuartPos.fromBlock(zMin);
 
-        final int maxQuartX = minQuartX + quartsInWidth;
-        final int maxQuartZ = minQuartZ + quartsInHeight;
+        final int maxQuartX = QuartPos.fromBlock(xMax);
+        final int maxQuartZ = QuartPos.fromBlock(zMax);
+        final int quartsInWidth = Math.max(quartStride, maxQuartX - minQuartX);
+        final int quartsInHeight = Math.max(quartStride, maxQuartZ - minQuartZ);
 
         int quartX = minQuartX;
         int quartY = QuartPos.fromBlock(center.getY());
         int quartZ = minQuartZ;
-
-        int sectionStartTexX = 0;
-        int sectionStartTexZ = 0;
 
         final List<RenderHelper> res = new ArrayList<>(((quartsInWidth / PreviewSection.SIZE) + 2) * ((quartsInHeight / PreviewSection.SIZE) + 2));
 
@@ -386,13 +432,12 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                 PreviewSection structureSection = storage.section4(quartX, 0, quartZ, PreviewStorage.FLAG_STRUCT_START);
                 PreviewSection.AccessData accessData = dataSection.calcQuartOffsetData(quartX, quartZ, maxQuartX, maxQuartZ);
 
-                res.add(new RenderHelper(dataSection, structureSection, accessData, sectionStartTexX, sectionStartTexZ));
+                res.add(new RenderHelper(dataSection, structureSection, accessData));
 
                 // Can we fit more stuff in the X direction?
                 if (accessData.continueX()) {
                     int quartDiffX = accessData.maxX() - accessData.minX();
                     quartX += quartDiffX;
-                    sectionStartTexX += (quartDiffX * quartExpand) / quartStride;
                     continue;
                 }
 
@@ -401,8 +446,6 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                     int quartDiffZ = accessData.maxZ() - accessData.minZ();
                     quartX = minQuartX;
                     quartZ += quartDiffZ;
-                    sectionStartTexZ += (quartDiffZ * quartExpand) / quartStride;
-                    sectionStartTexX = 0;
                     continue;
                 }
 
@@ -415,21 +458,43 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     }
 
     private void updateTexture(List<RenderHelper> renderData) {
-        int texX = 0;
-        int texZ = 0;
-
-        final int quartExpand = renderSettings.quartExpand();
         final int quartStride = renderSettings.quartStride();
+        final int blockStride = quartStride * QuartPos.SIZE;
+        final BlockPos center = center();
+        final int xMin = minBlockX(center);
+        final int zMin = minBlockZ(center);
+        final double effectiveScale = effectiveScaleBlockPos();
+        previewImg.fillRect(0, 0, texWidth, texHeight, 0xFF000000);
 
         // Render the biomes / heightmap
         for (RenderHelper r : renderData) {
-            // Reset icon coords to the current section
-            texX = r.sectionStartTexX;
-
             // Draw all the relevant data in the section
             for(int x = r.accessData.minX(); x < r.accessData.maxX(); x += quartStride) {
-                texZ = r.sectionStartTexZ;
+                final int blockStartX = QuartPos.toBlock(r.dataSection.quartX() + x);
+                int texXMin = (int) Math.floor((blockStartX - xMin) / effectiveScale);
+                int texXMax = (int) Math.ceil((blockStartX + blockStride - xMin) / effectiveScale);
+                if (texXMax <= 0 || texXMin >= texWidth) {
+                    continue;
+                }
+                texXMin = Math.max(texXMin, 0);
+                texXMax = Math.min(texXMax, texWidth);
+                final int texXSize = texXMax - texXMin;
+                if (texXSize <= 0) {
+                    continue;
+                }
                 for (int z = r.accessData.minZ(); z < r.accessData.maxZ(); z += quartStride) {
+                    final int blockStartZ = QuartPos.toBlock(r.dataSection.quartZ() + z);
+                    int texZMin = (int) Math.floor((blockStartZ - zMin) / effectiveScale);
+                    int texZMax = (int) Math.ceil((blockStartZ + blockStride - zMin) / effectiveScale);
+                    if (texZMax <= 0 || texZMin >= texHeight) {
+                        continue;
+                    }
+                    texZMin = Math.max(texZMin, 0);
+                    texZMax = Math.min(texZMax, texHeight);
+                    final int texZSize = texZMax - texZMin;
+                    if (texZSize <= 0) {
+                        continue;
+                    }
 
                     // Read the biome data
                     short rawData = r.dataSection.get(x, z);
@@ -477,22 +542,8 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                         }
                     }
 
-                    // Draw
-                    if (quartExpand > 1) {
-                        previewImg.fillRect(
-                                texX,
-                                texZ,
-                                Math.min(texWidth - texX, quartExpand),
-                                Math.min(texHeight - texZ, quartExpand),
-                                color
-                        );
-                    } else {
-                        previewImg.setPixel(texX, texZ, color);
-                    }
-
-                    texZ += quartExpand;
+                    previewImg.fillRect(texXMin, texZMin, texXSize, texZSize, color);
                 }
-                texX += quartExpand;
             }
 
 
@@ -632,13 +683,14 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             return null;
         }
         int guiScale = (int) minecraft.getWindow().getGuiScale();
+        final double effectiveScale = effectiveScaleBlockPos();
 
         final BlockPos center = center();
-        final int xMin = center.getX() - (texWidth / 2) * scaleBlockPos - 1;
-        final int zMin = center.getZ() - (texHeight / 2) * scaleBlockPos - 1;
+        final int xMin = minBlockX(center);
+        final int zMin = minBlockZ(center);
 
-        final int xPos = (int) ((mouseX - getX()) * guiScale * scaleBlockPos);
-        final int zPos = (int) ((mouseY - getY()) * guiScale * scaleBlockPos);
+        final int xPos = (int) Math.floor((mouseX - getX()) * guiScale * effectiveScale);
+        final int zPos = (int) Math.floor((mouseY - getY()) * guiScale * effectiveScale);
 
         int quartX = QuartPos.fromBlock(xMin + xPos);
         int quartY = QuartPos.fromBlock(center.getY());
@@ -809,8 +861,9 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     @Override
     protected void onDrag(MouseButtonEvent event, double mouseX, double mouseY) {
         final double guiScale = minecraft.getWindow().getGuiScale();
-        totalDragX -= (mouseX * guiScale) * ((double) scaleBlockPos);
-        totalDragZ -= (mouseY * guiScale) * ((double) scaleBlockPos);
+        final double effectiveScale = effectiveScaleBlockPos();
+        totalDragX -= (mouseX * guiScale) * effectiveScale;
+        totalDragZ -= (mouseY * guiScale) * effectiveScale;
     }
 
     @Override
@@ -850,9 +903,16 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             if (dataProvider.isUpdating()) {
                 return true;
             }
-            if ((deltaX + deltaY) > 0.0) {
+            final double scrollDelta = deltaX + deltaY;
+            if (scrollDelta == 0.0) {
+                return true;
+            }
+            if (InputConstants.isKeyDown(minecraft.getWindow(), GLFW.GLFW_KEY_LEFT_CONTROL)) {
+                final double nextZoomFactor = zoomFactor * Math.pow(ZOOM_SCROLL_FACTOR, scrollDelta);
+                zoomFactor = Math.clamp(nextZoomFactor, MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR);
+            } else if (scrollDelta > 0.0) {
                 renderSettings.decrementY();
-            } else if ((deltaX + deltaY) < 0.0) {
+            } else {
                 renderSettings.incrementY();
             }
             return true;

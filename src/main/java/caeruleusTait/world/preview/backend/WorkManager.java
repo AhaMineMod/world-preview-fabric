@@ -333,7 +333,7 @@ public class WorkManager {
          */
 
         final Instant end = Instant.now();
-        LOGGER.info(
+        LOGGER.debug(
                 "Queued {} chunks for generation using {} batches [{} ms] {}",
                 units,
                 currentBatches.size(),
