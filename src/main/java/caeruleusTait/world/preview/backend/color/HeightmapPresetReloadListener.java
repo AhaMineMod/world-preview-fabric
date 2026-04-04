@@ -2,7 +2,7 @@ package caeruleusTait.world.preview.backend.color;
 
 import caeruleusTait.world.preview.WorldPreview;
 import net.minecraft.resources.FileToIdConverter;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
@@ -18,13 +18,13 @@ public class HeightmapPresetReloadListener extends SimpleJsonResourceReloadListe
     }
 
     @Override
-    protected void apply(Map<ResourceLocation, PreviewData.HeightmapPresetData> object, ResourceManager resourceManager, ProfilerFiller profiler) {
+    protected void apply(Map<Identifier, PreviewData.HeightmapPresetData> object, ResourceManager resourceManager, ProfilerFiller profiler) {
         final WorldPreview worldPreview = WorldPreview.get();
         final PreviewMappingData previewMappingData = worldPreview.biomeColorMap();
         previewMappingData.clearHeightmapPresets();
 
         LOGGER.debug("Loading heightmap presets:");
-        for (Map.Entry<ResourceLocation, PreviewData.HeightmapPresetData> entry : object.entrySet()) {
+        for (Map.Entry<Identifier, PreviewData.HeightmapPresetData> entry : object.entrySet()) {
             final PreviewData.HeightmapPresetData value = entry.getValue();
             LOGGER.debug(" - {}: {} | {} to {}", entry.getKey(), value.name(), value.minY(), value.maxY());
             previewMappingData.addHeightmapPreset(value);

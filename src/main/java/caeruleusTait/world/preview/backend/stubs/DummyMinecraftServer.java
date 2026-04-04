@@ -6,11 +6,15 @@ import net.minecraft.SystemReport;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.Services;
 import net.minecraft.server.WorldStem;
-import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
+import net.minecraft.server.level.progress.LevelLoadListener;
 import net.minecraft.server.packs.repository.PackRepository;
+import net.minecraft.server.permissions.LevelBasedPermissionSet;
+import net.minecraft.server.permissions.PermissionSet;
+import net.minecraft.server.players.NameAndId;
 import net.minecraft.util.debugchart.SampleLogger;
 import net.minecraft.world.level.storage.LevelStorageSource;
 import org.jetbrains.annotations.NotNull;
+import org.jspecify.annotations.NonNull;
 
 import java.io.IOException;
 import java.net.Proxy;
@@ -25,9 +29,9 @@ public class DummyMinecraftServer extends MinecraftServer {
             Proxy proxy,
             DataFixer dataFixer,
             Services services,
-            ChunkProgressListenerFactory chunkProgressListenerFactory
+            LevelLoadListener levelLoadListener
     ) {
-        super(thread, levelStorageAccess, packRepository, worldStem, proxy, dataFixer, services, chunkProgressListenerFactory);
+        super(thread, levelStorageAccess, packRepository, worldStem, proxy, dataFixer, services, levelLoadListener);
         this.setSingleplayerProfile(new GameProfile(UUID.randomUUID(), "world-preview"));
         this.setDemo(false);
         this.setPlayerList(new DummyPlayerList(this, this.registries(), this.playerDataStorage, 1));
@@ -39,13 +43,13 @@ public class DummyMinecraftServer extends MinecraftServer {
     }
 
     @Override
-    public int getOperatorUserPermissionLevel() {
-        return 0;
+    public @NonNull LevelBasedPermissionSet operatorUserPermissions() {
+        return LevelBasedPermissionSet.GAMEMASTER;
     }
 
     @Override
-    public int getFunctionCompilationLevel() {
-        return 0;
+    public @NonNull PermissionSet getFunctionCompilationPermissions() {
+        return PermissionSet.NO_PERMISSIONS;
     }
 
     @Override
@@ -54,7 +58,7 @@ public class DummyMinecraftServer extends MinecraftServer {
     }
 
     @Override
-    protected SampleLogger getTickTimeLogger() {
+    protected @NonNull SampleLogger getTickTimeLogger() {
         return new SampleLogger() {
             @Override
             public void logFullSample(long[] ls) {
@@ -91,12 +95,7 @@ public class DummyMinecraftServer extends MinecraftServer {
     }
 
     @Override
-    public boolean isEpollEnabled() {
-        return false;
-    }
-
-    @Override
-    public boolean isCommandBlockEnabled() {
+    public boolean useNativeTransport() {
         return false;
     }
 
@@ -111,7 +110,17 @@ public class DummyMinecraftServer extends MinecraftServer {
     }
 
     @Override
-    public boolean isSingleplayerOwner(@NotNull GameProfile profile) {
+    public boolean isSingleplayerOwner(@NonNull NameAndId player) {
         return false;
+    }
+
+    @Override
+    public <T> T getOrThrow(Key<T> key) {
+        return null;
+    }
+
+    @Override
+    public int getMaxPlayers() {
+        return 0;
     }
 }

@@ -2,7 +2,7 @@ package caeruleusTait.world.preview.backend.color;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.security.InvalidParameterException;
 import java.util.List;
@@ -14,7 +14,7 @@ import java.util.List;
  * sections are copied and pasted, while others where slightly modified to remove caching / other edge cases.
  */
 public class ColorMap {
-    private final ResourceLocation key;
+    private final Identifier key;
     private final String name;
     private final Color[] colors;
 
@@ -28,13 +28,13 @@ public class ColorMap {
         ).apply(instance, RawColorMap::new));
     }
 
-    public ColorMap(ResourceLocation key, String name, Color[] colors) {
+    public ColorMap(Identifier key, String name, Color[] colors) {
         this.key = key;
         this.name = name;
         this.colors = colors;
     }
 
-    public ResourceLocation key() {
+    public Identifier key() {
         return key;
     }
 
@@ -42,7 +42,7 @@ public class ColorMap {
         return name;
     }
 
-    public ColorMap(ResourceLocation key, RawColorMap raw) {
+    public ColorMap(Identifier key, RawColorMap raw) {
         this.key = key;
         this.name = raw.name;
 

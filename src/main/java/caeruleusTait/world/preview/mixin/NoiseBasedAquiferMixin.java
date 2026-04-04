@@ -41,6 +41,6 @@ public abstract class NoiseBasedAquiferMixin {
     abstract int invokeGridZ(int z);
 
     private int cellWidth() {
-        return ((NoiseChunkAccessor) noiseChunk).getNoiseSettings().getCellWidth();
+        return ((NoiseChunkAccessor) noiseChunk).getCellWidth();
     }
 }

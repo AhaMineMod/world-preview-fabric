@@ -1,25 +1,25 @@
 package caeruleusTait.world.preview.client.gui.widgets;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.ARGB;
 
 public class OldStyleImageButton extends Button {
 
     protected final int xTexStart;
     protected final int yTexStart;
     protected final int yDiffTex;
-    protected final ResourceLocation texture;
+    protected final Identifier texture;
     protected final int texWidth;
     protected final int texHeight;
 
     public OldStyleImageButton(
             int x, int y, int width, int height,
             int xTexStart, int yTexStart, int yDiffTex,
-            ResourceLocation texture, int texWidth, int texHeight,
+            Identifier texture, int texWidth, int texHeight,
             OnPress onPress
     ) {
         super(x, y, width, height, Component.empty(), onPress, DEFAULT_NARRATION);
@@ -32,7 +32,7 @@ public class OldStyleImageButton extends Button {
     }
 
     @Override
-    protected void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+    protected void renderContents(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         int x = this.xTexStart;
         int y = this.yTexStart;
         if (!this.isActive()) {
@@ -41,10 +41,18 @@ public class OldStyleImageButton extends Button {
             y += yDiffTex;
         }
 
-        guiGraphics.flush();
-        RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, this.alpha);
-        RenderSystem.enableBlend();
-        RenderSystem.enableDepthTest();
-        guiGraphics.blit(RenderType::guiTextured, texture, getX(), getY(), x, y, width, height, texWidth, texHeight);
+        guiGraphics.blit(
+                RenderPipelines.GUI_TEXTURED,
+                texture,
+                getX(),
+                getY(),
+                x,
+                y,
+                getWidth(),
+                getHeight(),
+                texWidth,
+                texHeight,
+                ARGB.white(this.alpha)
+        );
     }
 }

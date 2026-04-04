@@ -1,16 +1,16 @@
 package caeruleusTait.world.preview.backend.stubs;
 
-import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.flag.FeatureFlagSet;
-import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.storage.ServerLevelData;
 import net.minecraft.world.level.timers.TimerQueue;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Optional;
 import java.util.UUID;
 
 public class DummyServerLevelData implements ServerLevelData {
@@ -91,14 +91,15 @@ public class DummyServerLevelData implements ServerLevelData {
     }
 
     @Override
-    public void setWorldBorder(WorldBorder.Settings serializer) {
-
+    public Optional<WorldBorder.Settings> getLegacyWorldBorderSettings() {
+        return Optional.empty();
     }
 
     @Override
-    public WorldBorder.Settings getWorldBorder() {
-        return null;
+    public void setLegacyWorldBorderSettings(Optional<WorldBorder.Settings> legacyWorldBorderSettings) {
+
     }
+
 
     @Override
     public boolean isInitialized() {
@@ -136,13 +137,8 @@ public class DummyServerLevelData implements ServerLevelData {
     }
 
     @Override
-    public BlockPos getSpawnPos() {
-        return BlockPos.ZERO;
-    }
-
-    @Override
-    public float getSpawnAngle() {
-        return 0;
+    public RespawnData getRespawnData() {
+        return RespawnData.DEFAULT;
     }
 
     @Override
@@ -191,7 +187,7 @@ public class DummyServerLevelData implements ServerLevelData {
     }
 
     @Override
-    public void setSpawn(BlockPos spawnPoint, float spawnAngle) {
+    public void setSpawn(RespawnData spawn) {
 
     }
 }

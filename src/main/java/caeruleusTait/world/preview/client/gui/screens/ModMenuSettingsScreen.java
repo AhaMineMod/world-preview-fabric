@@ -11,16 +11,16 @@ import net.minecraft.client.gui.layouts.FrameLayout;
 import net.minecraft.client.gui.layouts.GridLayout;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.CommonComponents;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 
 import static caeruleusTait.world.preview.client.WorldPreviewComponents.SETTINGS_TITLE;
 
 public class ModMenuSettingsScreen extends Screen {
 
-    public static final ResourceLocation FOOTER_SEPERATOR = ResourceLocation.parse("textures/gui/footer_separator.png");
+    public static final Identifier FOOTER_SEPERATOR = Identifier.parse("textures/gui/footer_separator.png");
 
     private final Screen lastScreen;
     private final TabManager tabManager;
@@ -72,7 +72,7 @@ public class ModMenuSettingsScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int i, int j, float f) {
-        guiGraphics.blit(RenderType::guiTextured, FOOTER_SEPERATOR, 0, Mth.roundToward(this.height - 36 - 2, 2), 0.0F, 0.0F, this.width, 2, 32, 2);
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, FOOTER_SEPERATOR, 0, Mth.roundToward(this.height - 36 - 2, 2), 0.0F, 0.0F, this.width, 2, 32, 2);
         super.render(guiGraphics, i, j, f);
     }
 

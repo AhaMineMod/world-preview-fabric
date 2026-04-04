@@ -12,8 +12,9 @@ import caeruleusTait.world.preview.mixin.NoiseChunkAccessor;
 import com.mojang.datafixers.DataFixer;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Lifecycle;
-import net.minecraft.FileUtil;
-import net.minecraft.Util;
+import net.minecraft.server.permissions.PermissionSet;
+import net.minecraft.util.FileUtil;
+import net.minecraft.util.Util;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -24,7 +25,7 @@ import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.server.ReloadableServerResources;
@@ -33,7 +34,7 @@ import net.minecraft.server.WorldLoader;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.level.progress.ChunkProgressListener;
+import net.minecraft.server.level.progress.LevelLoadListener;
 import net.minecraft.server.packs.repository.PackRepository;
 import net.minecraft.server.packs.repository.ServerPacksSource;
 import net.minecraft.server.packs.resources.CloseableResourceManager;
@@ -41,7 +42,7 @@ import net.minecraft.tags.TagLoader;
 import net.minecraft.util.datafix.DataFixers;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelHeightAccessor;
@@ -269,7 +270,7 @@ public class SampleUtils implements AutoCloseable {
         dimension = Registries.levelStemToLevel(levelStemResourceKey);
 
         // Some mods listen on the <init> of MinecraftServer
-        final int functionCompilationLevel = 0;
+        final PermissionSet functionCompilationLevel = PermissionSet.NO_PERMISSIONS;
         final Executor executor = Executors.newSingleThreadExecutor();
         final LevelSettings levelSettings = new LevelSettings("temp", GameType.CREATIVE, false, Difficulty.NORMAL, true, new GameRules(worldDataConfiguration.enabledFeatures()), worldDataConfiguration);
         List<Registry.PendingTags<?>> list = TagLoader.loadTagsForExistingRegistries(resourceManager, layeredRegistryAccess.getLayer(RegistryLayer.STATIC));
@@ -287,37 +288,38 @@ public class SampleUtils implements AutoCloseable {
         reloadableServerResources.updateStaticRegistryTags();
         WorldStem worldStem = new WorldStem(resourceManager, reloadableServerResources, layeredRegistryAccess, primaryLevelData);
 
-        final ChunkProgressListener chunkProgressListener = new ChunkProgressListener() {
+        final LevelLoadListener levelLoadListener = new LevelLoadListener() {
             @Override
-            public void updateSpawnPos(ChunkPos center) {
+            public void start(Stage stage, int totalChunks) {
 
             }
 
             @Override
-            public void onStatusChange(ChunkPos chunkPosition, @Nullable ChunkStatus newStatus) {
+            public void update(Stage stage, int readyChunks, int totalChunks) {
 
             }
 
             @Override
-            public void start() {
+            public void finish(Stage stage) {
 
             }
 
             @Override
-            public void stop() {
+            public void updateFocus(ResourceKey<Level> dimension, ChunkPos chunkPos) {
 
             }
         };
 
         minecraftServer = new DummyMinecraftServer(
-                new Thread(() -> {}), // Dummy thread is required for the spark mod
+                new Thread(() -> {
+                }), // Dummy thread is required for the spark mod
                 levelStorageAccess,
                 packRepository,
                 worldStem,
                 proxy,
                 dataFixer,
-                new Services(null, null, null, null),
-                i -> chunkProgressListener
+                new Services(null, null, null, null, null),
+                levelLoadListener
         );
 
         // All this stuff, just so we can give Forge a fake minecraft server...
@@ -337,20 +339,7 @@ public class SampleUtils implements AutoCloseable {
                 ),
                 dimension,
                 levelStem,
-                new ChunkProgressListener() {
-                    @Override
-                    public void updateSpawnPos(ChunkPos center) {}
-
-                    @Override
-                    public void onStatusChange(ChunkPos chunkPosition, @Nullable ChunkStatus newStatus) {}
-
-                    @Override
-                    public void start() {}
-
-                    @Override
-                    public void stop() {}
-                },
-                false, // debug
+                false,
                 BiomeManager.obfuscateSeed(worldOptions.seed()),
                 List.of(),
                 false, // tickTime
@@ -406,13 +395,12 @@ public class SampleUtils implements AutoCloseable {
                 new DummyServerLevelData(),
                 dimension,
                 levelStem,
-                chunkProgressListener,
                 false, // is Debug
                 BiomeManager.obfuscateSeed(worldOptions.seed()),
                 List.of(),
                 false,
                 null
-            );
+        );
     }
 
     public @Nullable ServerPlayer getPlayers(UUID playerId) {
@@ -422,10 +410,11 @@ public class SampleUtils implements AutoCloseable {
         return minecraftServer.getPlayerList().getPlayer(playerId);
     }
 
-    public record BiomeResult(ResourceKey<Biome> biome, short[] noiseResult) {}
+    public record BiomeResult(ResourceKey<Biome> biome, short[] noiseResult) {
+    }
 
     private static short doubleToShort(double val, double factor) {
-        return (short) Math.min(Short.MAX_VALUE, Math.max(Short.MIN_VALUE, (long) (val * factor * (double)Short.MAX_VALUE)));
+        return (short) Math.min(Short.MAX_VALUE, Math.max(Short.MIN_VALUE, (long) (val * factor * (double) Short.MAX_VALUE)));
     }
 
     public boolean hasRawNoiseInfo() {
@@ -443,7 +432,7 @@ public class SampleUtils implements AutoCloseable {
             final double depth = sampler.depth().compute(singlePointContext);
             final double weirdness = sampler.weirdness().compute(singlePointContext);
 
-            final short[] noiseData = new short[] {
+            final short[] noiseData = new short[]{
                     doubleToShort(temperature, 1),
                     doubleToShort(humidity, 1),
                     doubleToShort(continentalness, 0.5),
@@ -480,11 +469,11 @@ public class SampleUtils implements AutoCloseable {
     }
      */
 
-    public List<Pair<ResourceLocation, StructureStart>> doStructures(ChunkPos chunkPos) {
+    public List<Pair<Identifier, StructureStart>> doStructures(ChunkPos chunkPos) {
         ProtoChunk protoChunk = (ProtoChunk) previewLevel.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
         chunkGenerator.createStructures(registryAccess, chunkGeneratorStructureState, structureManager, protoChunk, structureTemplateManager, dimension);
         Map<Structure, StructureStart> raw = protoChunk.getAllStarts();
-        List<Pair<ResourceLocation, StructureStart>> res = new ArrayList<>(raw.size());
+        List<Pair<Identifier, StructureStart>> res = new ArrayList<>(raw.size());
         for (Map.Entry<Structure, StructureStart> x : protoChunk.getAllStarts().entrySet()) {
             res.add(new Pair<>(structureRegistry.getKey(x.getKey()), x.getValue()));
         }

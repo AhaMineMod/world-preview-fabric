@@ -7,7 +7,7 @@ import com.google.gson.GsonBuilder;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +17,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public class WorldPreview implements ModInitializer {
 
@@ -157,18 +156,16 @@ public class WorldPreview implements ModInitializer {
         }
     }
 
-    public void writeUserColorConfig(Map<ResourceLocation, PreviewMappingData.ColorEntry> userColorConfig) {
+    public void writeUserColorConfig(Map<Identifier, PreviewMappingData.ColorEntry> userColorConfig) {
         record Entry(int r, int g, int b, boolean cave) {
         }
-        Map<String, Entry> writeData = userColorConfig.entrySet()
-                .stream()
-                .collect(Collectors.toMap(x -> x.getKey().toString(), x -> {
-                    PreviewMappingData.ColorEntry raw = x.getValue();
-                    final int r = (raw.color >> 16) & 0xFF;
-                    final int g = (raw.color >> 8) & 0xFF;
-                    final int b = raw.color & 0xFF;
-                    return new Entry(r, g, b, raw.cave.orElseThrow());
-                }));
+        Map<String, Entry> writeData = new java.util.HashMap<>();
+        userColorConfig.forEach((key, value) -> {
+            final int r = (value.color >> 16) & 0xFF;
+            final int g = (value.color >> 8) & 0xFF;
+            final int b = value.color & 0xFF;
+            writeData.put(key.toString(), new Entry(r, g, b, value.cave.orElseThrow()));
+        });
 
         final String raw = gson.toJson(writeData);
         try {

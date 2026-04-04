@@ -18,9 +18,9 @@ import net.minecraft.client.gui.layouts.FrameLayout;
 import net.minecraft.client.gui.layouts.GridLayout;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.CommonComponents;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 
 import java.util.Map;
@@ -29,9 +29,9 @@ import java.util.stream.Collectors;
 import static caeruleusTait.world.preview.client.WorldPreviewComponents.SETTINGS_TITLE;
 
 public class SettingsScreen extends Screen {
-    public static final ResourceLocation HEADER_SEPERATOR = ResourceLocation.parse("textures/gui/header_separator.png");
-    public static final ResourceLocation FOOTER_SEPERATOR = ResourceLocation.parse("textures/gui/footer_separator.png");
-    public static final ResourceLocation LIGHT_DIRT_BACKGROUND = ResourceLocation.parse("textures/gui/light_dirt_background.png");
+    public static final Identifier HEADER_SEPERATOR = Identifier.parse("textures/gui/header_separator.png");
+    public static final Identifier FOOTER_SEPERATOR = Identifier.parse("textures/gui/footer_separator.png");
+    public static final Identifier LIGHT_DIRT_BACKGROUND = Identifier.parse("textures/gui/light_dirt_background.png");
 
     private final Screen lastScreen;
     private final PreviewContainer previewContainer;
@@ -90,13 +90,13 @@ public class SettingsScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int i, int j, float f) {
-        guiGraphics.blit(RenderType::guiTextured, FOOTER_SEPERATOR, 0, Mth.roundToward(this.height - 36 - 2, 2), 0.0F, 0.0F, this.width, 2, 32, 2);
+        guiGraphics.blit(RenderPipelines.GUI_TEXTURED, FOOTER_SEPERATOR, 0, Mth.roundToward(this.height - 36 - 2, 2), 0.0F, 0.0F, this.width, 2, 32, 2);
         super.render(guiGraphics, i, j, f);
     }
 
     @Override
     public void onClose() {
-        Map<ResourceLocation, PreviewMappingData.ColorEntry> toWrite = previewContainer.allBiomes()
+        Map<Identifier, PreviewMappingData.ColorEntry> toWrite = previewContainer.allBiomes()
                 .stream()
                 .filter(x -> x.dataSource() == PreviewData.DataSource.CONFIG)
                 .collect(
