@@ -34,11 +34,15 @@ public abstract class NoiseBasedAquiferMixin {
         return k + invokeGridZ(((NoiseChunkAccessor)noiseChunk).getCellCountXZ() * cellWidth());
     }
 
-    @Invoker
-    abstract int invokeGridX(int x);
+    @Invoker("gridX")
+    private static int invokeGridX(int x) {
+        throw new AssertionError();
+    }
 
-    @Invoker
-    abstract int invokeGridZ(int z);
+    @Invoker("gridZ")
+    private static int invokeGridZ(int z) {
+        throw new AssertionError();
+    }
 
     private int cellWidth() {
         return ((NoiseChunkAccessor) noiseChunk).getCellWidth();

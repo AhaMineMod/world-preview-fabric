@@ -50,6 +50,7 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private static final double MIN_ZOOM_FACTOR = 0.25;
     private static final double MAX_ZOOM_FACTOR = 16.0;
     private static final double ZOOM_SCROLL_FACTOR = 1.1;
+    private static final int STRUCTURE_ICON_TARGET_SIZE = 16;
 
     private final Minecraft minecraft;
     private final PreviewDisplayDataProvider dataProvider;
@@ -564,12 +565,23 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                 short id = structure.structureId();
                 TextureCoordinate texCenter = blockToTexture(structure.center());
                 IconData iconData = structureIcons[id];
-                int iconWidth = iconData != null ? iconData.width() : dummyIcon.getWidth();
-                int iconHeight = iconData != null ? iconData.height() : dummyIcon.getHeight();
                 Identifier iconTexture = iconData != null ? iconData.textureId() : null;
                 ItemStack item = structureItems[id];
                 if (iconTexture == null && item == null) {
                     continue;
+                }
+
+                final int iconWidth;
+                final int iconHeight;
+                if (item != null) {
+                    iconWidth = STRUCTURE_ICON_TARGET_SIZE;
+                    iconHeight = STRUCTURE_ICON_TARGET_SIZE;
+                } else {
+                    final int rawIconWidth = iconData != null ? iconData.width() : dummyIcon.getWidth();
+                    final int rawIconHeight = iconData != null ? iconData.height() : dummyIcon.getHeight();
+                    final double iconScale = STRUCTURE_ICON_TARGET_SIZE / (double) Math.max(rawIconWidth, rawIconHeight);
+                    iconWidth = Math.max(1, (int) Math.round(rawIconWidth * iconScale));
+                    iconHeight = Math.max(1, (int) Math.round(rawIconHeight * iconScale));
                 }
 
                 // Check if visible
@@ -594,11 +606,17 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
 
                 final int rXMin = getX() + (int) Math.round(texStartX / guiScale);
                 final int rZMin = getY() + (int) Math.round(texStartZ / guiScale);
-                final int rXMax = rXMin + Math.max(1, (int) Math.round(iconWidth / guiScale));
-                final int rZMax = rZMin + Math.max(1, (int) Math.round(iconHeight / guiScale));
+                final int renderWidth = Math.max(1, (int) Math.round(iconWidth / guiScale));
+                final int renderHeight = Math.max(1, (int) Math.round(iconHeight / guiScale));
+                final int rXMax = rXMin + renderWidth;
+                final int rZMax = rZMin + renderHeight;
 
                 if (item != null) {
-                    guiGraphics.renderItem(item, rXMin, rZMin);
+                    guiGraphics.pose().pushMatrix();
+                    guiGraphics.pose().translate(rXMin, rZMin);
+                    guiGraphics.pose().scale(renderWidth / 16f, renderHeight / 16f);
+                    guiGraphics.renderItem(item, 0, 0);
+                    guiGraphics.pose().popMatrix();
                 } else if (iconTexture != null) {
                     WorldPreviewClient.renderTexture(guiGraphics, iconTexture, rXMin, rZMin, rXMax, rZMax);
                 }
