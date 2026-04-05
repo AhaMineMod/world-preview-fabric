@@ -1,5 +1,6 @@
 package caeruleusTait.world.preview.backend.worker;
 
+import caeruleusTait.world.preview.WorldPreview;
 import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.storage.PreviewSection;
 import com.mojang.datafixers.util.Pair;
@@ -48,7 +49,11 @@ public class WorkBatch {
 
             // Mark as completed early to avoid duplicate work
             synchronized (completedSynchro) {
-                workUnits.forEach(WorkUnit::markCompleted);
+                final var workManager = WorldPreview.get().workManager();
+                for (WorkUnit unit : workUnits) {
+                    unit.markCompleted();
+                    workManager.onWorkUnitCompleted(unit.flags());
+                }
             }
 
             applyChunkResult(res);

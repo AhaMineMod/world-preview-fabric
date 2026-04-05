@@ -122,7 +122,6 @@ public class SampleUtils implements AutoCloseable {
     private final MinecraftServer minecraftServer;
     private final ServerLevel serverLevel;
     private final WorldPreviewConfig cfg;
-    private final Object structureSamplingLock = new Object();
 
     /**
      * Create SampleUtils with a <b>real</b> Minecraft server
@@ -472,10 +471,7 @@ public class SampleUtils implements AutoCloseable {
 
     public List<Pair<Identifier, StructureStart>> doStructures(ChunkPos chunkPos) {
         ProtoChunk protoChunk = (ProtoChunk) previewLevel.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
-        // Structure template internals mutate shared caches and are not safe under concurrent createStructures calls.
-        synchronized (structureSamplingLock) {
-            chunkGenerator.createStructures(registryAccess, chunkGeneratorStructureState, structureManager, protoChunk, structureTemplateManager, dimension);
-        }
+        chunkGenerator.createStructures(registryAccess, chunkGeneratorStructureState, structureManager, protoChunk, structureTemplateManager, dimension);
         Map<Structure, StructureStart> raw = protoChunk.getAllStarts();
         List<Pair<Identifier, StructureStart>> res = new ArrayList<>(raw.size());
         for (Map.Entry<Structure, StructureStart> x : protoChunk.getAllStarts().entrySet()) {

@@ -57,6 +57,19 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private static final long TEXTURE_REFRESH_MOVING_MS = 33L;
     private static final long GENERATION_QUEUE_REFRESH_MS = 120L;
     private static final long TEXTURE_RENDER_BUDGET_NS = 4_000_000L;
+    private static final long TEXTURE_RENDER_BUDGET_DRAGGING_NS = 6_000_000L;
+    private static final long TEXTURE_RENDER_BUDGET_DRAG_BURST_NS = 10_000_000L;
+    private static final long DRAG_RENDER_BURST_DURATION_MS = 300L;
+    private static final double DRAG_CLICK_THRESHOLD_BLOCKS = 4.0;
+    private static final long DRAG_PREDICTION_HORIZON_MS = 220L;
+    private static final double DRAG_PREDICTION_MAX_VIEW_MULTIPLIER = 0.75;
+    private static final double DRAG_VELOCITY_SMOOTHING = 0.35;
+    private static final double DRAG_PREDICTION_MIN_SPEED_BLOCKS_PER_SEC = 24.0;
+    private static final double MIN_SILENT_ZOOM_FACTOR = 0.0625;
+    private static final double MAX_SILENT_ZOOM_FACTOR = 64.0;
+    private static final int PROGRESS_BAR_WIDTH = 120;
+    private static final int PROGRESS_BAR_HEIGHT = 5;
+    private static final RenderSettings.RenderMode[] RENDER_MODES = RenderSettings.RenderMode.values();
 
     private final Minecraft minecraft;
     private final PreviewDisplayDataProvider dataProvider;
@@ -93,9 +106,14 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
 
     private double totalDragX = 0;
     private double totalDragZ = 0;
+    private double dragVelocityBlocksX = 0.0;
+    private double dragVelocityBlocksZ = 0.0;
+    private long lastDragSampleMs = 0L;
 
     private int scaleBlockPos = 1;
     private double zoomFactor = 1.0;
+    private double silentZoomFactor = 1.0;
+    private boolean silentZoomInitialized = false;
 
     private StructHoverHelperCell[] hoverHelperGrid;
     private final int hoverHelperGridCellSize = 64;
@@ -115,6 +133,8 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     private boolean textureRenderInProgress = false;
     private int textureRenderSectionCursor = 0;
     private int textureRenderXCursor = Integer.MIN_VALUE;
+    private long lastTextureDataVersion = Long.MIN_VALUE;
+    private long dragBurstUntilMs = 0L;
     private List<TextureDirtyRegion> textureDirtyRegions = List.of();
     private boolean textureDirtyIsFull = true;
 
@@ -162,15 +182,33 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         textureRenderInProgress = false;
         textureRenderSectionCursor = 0;
         textureRenderXCursor = Integer.MIN_VALUE;
+        lastTextureDataVersion = Long.MIN_VALUE;
+        dragBurstUntilMs = 0L;
         textureDirtyRegions = fullTextureDirtyRegions();
         textureDirtyIsFull = true;
     }
 
     public void setSize(int width, int height) {
+        final int prevTexWidth = texWidth;
+        final int prevTexHeight = texHeight;
+        final int nextTexWidth = width * (int) minecraft.getWindow().getGuiScale();
+        final int nextTexHeight = height * (int) minecraft.getWindow().getGuiScale();
+
+        if (silentZoomInitialized && prevTexWidth > 0 && prevTexHeight > 0 && nextTexWidth > 0 && nextTexHeight > 0
+                && (prevTexWidth != nextTexWidth || prevTexHeight != nextTexHeight)) {
+            final double areaRatio = (nextTexWidth * (double) nextTexHeight) / (prevTexWidth * (double) prevTexHeight);
+            if (Double.isFinite(areaRatio) && areaRatio > 0.0) {
+                final double scaleCompensation = Math.sqrt(areaRatio);
+                silentZoomFactor = Math.clamp(silentZoomFactor * scaleCompensation, MIN_SILENT_ZOOM_FACTOR, MAX_SILENT_ZOOM_FACTOR);
+            }
+        } else if (!silentZoomInitialized) {
+            silentZoomInitialized = true;
+        }
+
         this.width = width;
         this.height = height;
-        this.texWidth = this.width * (int) minecraft.getWindow().getGuiScale();
-        this.texHeight = this.height * (int) minecraft.getWindow().getGuiScale();
+        this.texWidth = nextTexWidth;
+        this.texHeight = nextTexHeight;
         resizeImage();
     }
 
@@ -225,6 +263,8 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         textureRenderInProgress = false;
         textureRenderSectionCursor = 0;
         textureRenderXCursor = Integer.MIN_VALUE;
+        lastTextureDataVersion = Long.MIN_VALUE;
+        dragBurstUntilMs = 0L;
         textureDirtyRegions = fullTextureDirtyRegions();
         textureDirtyIsFull = true;
     }
@@ -319,20 +359,21 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                 guiGraphics.drawCenteredString(minecraft.font, MSG_PREVIEW_SETUP_LOADING, centerX, centerY, 0xFFFFFFFF);
             } else {
                 final boolean renderStateChanged = !currentState.equals(lastRenderedState);
+                final boolean isDraggingMap = clicked && (Math.abs(totalDragX) > DRAG_CLICK_THRESHOLD_BLOCKS || Math.abs(totalDragZ) > DRAG_CLICK_THRESHOLD_BLOCKS);
+                final long textureDataVersion = currentTextureDataVersion();
+                final boolean textureDataChanged = textureDataVersion != lastTextureDataVersion;
                 final long refreshIntervalMs = (textureRenderInProgress || renderStateChanged) ? TEXTURE_REFRESH_MOVING_MS : TEXTURE_REFRESH_IDLE_MS;
                 final boolean shouldRefreshTexture = forceTextureRefresh
                         || renderStateChanged
                         || textureRenderInProgress
                         || cachedRenderData.isEmpty()
-                        || (nowMs - lastTextureRefreshMs >= refreshIntervalMs);
+                        || (textureDataChanged && (nowMs - lastTextureRefreshMs >= refreshIntervalMs));
 
                 boolean publishVisibility = false;
                 if (shouldRefreshTexture) {
-                    final boolean passStateChanged = texturePassState != null && !currentState.equals(texturePassState);
                     final boolean shouldRestartPass = forceTextureRefresh
-                            || passStateChanged
-                            || !textureRenderInProgress
-                            || cachedRenderData.isEmpty();
+                            || (!textureRenderInProgress && (renderStateChanged || textureDataChanged || cachedRenderData.isEmpty()))
+                            || (isDraggingMap && renderStateChanged && (nowMs - lastTextureRefreshMs >= TEXTURE_REFRESH_MOVING_MS));
                     if (shouldRestartPass) {
                         final RenderStateSnapshot sourceTextureState = texturePassState != null ? texturePassState : lastRenderedState;
                         List<TextureDirtyRegion> dirtyRegions = fullTextureDirtyRegions();
@@ -363,9 +404,19 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                         }
                         rebuildStructureRenderCache(cachedRenderData);
                         beginTextureRenderPass(cachedRenderData, fullTextureReset, dirtyRegions);
+                        lastTextureDataVersion = textureDataVersion;
                     }
 
-                    final boolean texturePassCompleted = continueTextureRenderPass(cachedRenderData, TEXTURE_RENDER_BUDGET_NS);
+                    final long textureRenderBudgetNs;
+                    if (nowMs < dragBurstUntilMs) {
+                        textureRenderBudgetNs = TEXTURE_RENDER_BUDGET_DRAG_BURST_NS;
+                    } else if (isDraggingMap) {
+                        textureRenderBudgetNs = TEXTURE_RENDER_BUDGET_DRAGGING_NS;
+                    } else {
+                        textureRenderBudgetNs = TEXTURE_RENDER_BUDGET_NS;
+                    }
+
+                    final boolean texturePassCompleted = continueTextureRenderPass(cachedRenderData, textureRenderBudgetNs);
                     previewTexture.upload();
                     lastTextureRefreshMs = nowMs;
                     forceTextureRefresh = false;
@@ -399,6 +450,7 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                     biomesChanged();
                 }
                 updateTooltip(guiGraphics, mouseX, mouseZ);
+                renderProgressBars(guiGraphics, xMin, yMin);
             }
         }
 
@@ -486,6 +538,29 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                 selectedBiomeId,
                 highlightCaves
         );
+    }
+
+    private long currentTextureDataVersion() {
+        return workManager.renderDataVersion();
+    }
+
+    private void renderProgressBars(GuiGraphics guiGraphics, int xMin, int yMin) {
+        final float structProgress = workManager.structureGenerationProgress();
+        if (structProgress >= 0.999f) {
+            return;
+        }
+
+        final int barX = xMin + 6;
+        final int barY = yMin + 6;
+        final int barWidth = Math.min(PROGRESS_BAR_WIDTH, Math.max(60, width - 12));
+        final int panelWidth = barWidth + 8;
+        final int panelHeight = 20;
+        final int structFill = Math.max(0, Math.min(barWidth, Math.round(barWidth * structProgress)));
+
+        guiGraphics.fill(barX - 4, barY - 4, barX - 4 + panelWidth, barY - 4 + panelHeight, 0x88000000);
+        guiGraphics.drawString(minecraft.font, "Struct", barX, barY - 1, 0xFFFFFFFF);
+        guiGraphics.fill(barX, barY + 8, barX + barWidth, barY + 8 + PROGRESS_BAR_HEIGHT, 0xFF2A2A2A);
+        guiGraphics.fill(barX, barY + 8, barX + structFill, barY + 8 + PROGRESS_BAR_HEIGHT, 0xFF42A5F5);
     }
 
     private List<TextureDirtyRegion> fullTextureDirtyRegions() {
@@ -604,7 +679,7 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             return null;
         }
 
-        final double effectiveScale = effectiveScaleBlockPos();
+        final double effectiveScale = effectiveScaleBlockPos(toState);
         if (effectiveScale <= 0.0) {
             return null;
         }
@@ -659,11 +734,24 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     }
 
     private double effectiveScaleBlockPos() {
-        return scaleBlockPos / zoomFactor;
+        return scaleBlockPos / (zoomFactor * silentZoomFactor);
+    }
+
+    private double effectiveScaleBlockPos(RenderStateSnapshot state) {
+        final double zoom = Double.longBitsToDouble(state.zoomBits);
+        if (zoom <= 0.0) {
+            return 1.0;
+        }
+        final int stateScaleBlockPos = (QuartPos.SIZE / state.quartExpand) * state.quartStride;
+        return stateScaleBlockPos / (zoom * silentZoomFactor);
     }
 
     private int minBlockX(BlockPos center) {
         return (int) Math.floor(center.getX() - (texWidth * effectiveScaleBlockPos() / 2.0) - 1.0);
+    }
+
+    private int minBlockX(RenderStateSnapshot state) {
+        return (int) Math.floor(state.centerX - (state.texWidth * effectiveScaleBlockPos(state) / 2.0) - 1.0);
     }
 
     private int maxBlockX(BlockPos center) {
@@ -674,8 +762,20 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         return (int) Math.floor(center.getZ() - (texHeight * effectiveScaleBlockPos() / 2.0) - 1.0);
     }
 
+    private int minBlockZ(RenderStateSnapshot state) {
+        return (int) Math.floor(state.centerZ - (state.texHeight * effectiveScaleBlockPos(state) / 2.0) - 1.0);
+    }
+
     private int maxBlockZ(BlockPos center) {
         return (int) Math.ceil(center.getZ() + (texHeight * effectiveScaleBlockPos() / 2.0) + 1.0);
+    }
+
+    private RenderSettings.RenderMode renderMode(RenderStateSnapshot state) {
+        final int modeOrdinal = state.modeOrdinal;
+        if (modeOrdinal < 0 || modeOrdinal >= RENDER_MODES.length) {
+            return RenderSettings.RenderMode.BIOMES;
+        }
+        return RENDER_MODES[modeOrdinal];
     }
 
     private TextureCoordinate blockToTexture(BlockPos blockPos) {
@@ -704,11 +804,30 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
 
     private void queueGeneration() {
         final BlockPos center = center();
-        final int xMin = minBlockX(center);
-        final int xMax = maxBlockX(center);
-        final int zMin = minBlockZ(center);
-        final int zMax = maxBlockZ(center);
+        int xMin = minBlockX(center);
+        int xMax = maxBlockX(center);
+        int zMin = minBlockZ(center);
+        int zMax = maxBlockZ(center);
         final int y = center.getY();
+
+        // While dragging, predict near-future trajectory and queue that direction too.
+        if (clicked) {
+            final double speed = Math.hypot(dragVelocityBlocksX, dragVelocityBlocksZ);
+            if (speed >= DRAG_PREDICTION_MIN_SPEED_BLOCKS_PER_SEC) {
+                final double lookAheadSeconds = DRAG_PREDICTION_HORIZON_MS / 1000.0;
+                final double maxAhead = Math.max(texWidth, texHeight) * effectiveScaleBlockPos() * DRAG_PREDICTION_MAX_VIEW_MULTIPLIER;
+                final int predictedOffsetX = (int) Math.round(Math.clamp(dragVelocityBlocksX * lookAheadSeconds, -maxAhead, maxAhead));
+                final int predictedOffsetZ = (int) Math.round(Math.clamp(dragVelocityBlocksZ * lookAheadSeconds, -maxAhead, maxAhead));
+                if (predictedOffsetX != 0 || predictedOffsetZ != 0) {
+                    final BlockPos predictedCenter = new BlockPos(center.getX() + predictedOffsetX, y, center.getZ() + predictedOffsetZ);
+                    xMin = Math.min(xMin, minBlockX(predictedCenter));
+                    xMax = Math.max(xMax, maxBlockX(predictedCenter));
+                    zMin = Math.min(zMin, minBlockZ(predictedCenter));
+                    zMax = Math.max(zMax, maxBlockZ(predictedCenter));
+                }
+            }
+        }
+
         workManager.queueRange(new BlockPos(xMin, y, zMin), new BlockPos(xMax, y, zMax));
     }
 
@@ -813,13 +932,13 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             return true;
         }
 
-        final int quartStride = renderSettings.quartStride();
+        final RenderStateSnapshot passState = texturePassState != null ? texturePassState : currentRenderState();
+        final int quartStride = passState.quartStride;
         final int blockStride = quartStride * QuartPos.SIZE;
-        final BlockPos center = center();
-        final int xMin = minBlockX(center);
-        final int zMin = minBlockZ(center);
-        final double effectiveScale = effectiveScaleBlockPos();
-        final var mode = renderSettings.mode;
+        final int xMin = minBlockX(passState);
+        final int zMin = minBlockZ(passState);
+        final double effectiveScale = effectiveScaleBlockPos(passState);
+        final var mode = renderMode(passState);
         final long deadline = System.nanoTime() + budgetNs;
 
         while (textureRenderSectionCursor < renderData.size()) {
@@ -920,7 +1039,6 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                         previewImg.fillRect(texXMin, texZMin, texXSize, texZSize, color);
                     }
                 }
-
                 if (System.nanoTime() >= deadline) {
                     textureRenderXCursor = x + quartStride;
                     textureRenderInProgress = true;
@@ -1315,8 +1433,24 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     protected void onDrag(MouseButtonEvent event, double mouseX, double mouseY) {
         final double guiScale = minecraft.getWindow().getGuiScale();
         final double effectiveScale = effectiveScaleBlockPos();
-        totalDragX -= (mouseX * guiScale) * effectiveScale;
-        totalDragZ -= (mouseY * guiScale) * effectiveScale;
+        final double dragDeltaX = -(mouseX * guiScale) * effectiveScale;
+        final double dragDeltaZ = -(mouseY * guiScale) * effectiveScale;
+        totalDragX += dragDeltaX;
+        totalDragZ += dragDeltaZ;
+
+        final long nowMs = System.currentTimeMillis();
+        if (lastDragSampleMs > 0L) {
+            final long dtMs = Math.max(1L, nowMs - lastDragSampleMs);
+            final double factor = 1000.0 / dtMs;
+            final double instantVX = dragDeltaX * factor;
+            final double instantVZ = dragDeltaZ * factor;
+            dragVelocityBlocksX += (instantVX - dragVelocityBlocksX) * DRAG_VELOCITY_SMOOTHING;
+            dragVelocityBlocksZ += (instantVZ - dragVelocityBlocksZ) * DRAG_VELOCITY_SMOOTHING;
+        } else {
+            dragVelocityBlocksX = 0.0;
+            dragVelocityBlocksZ = 0.0;
+        }
+        lastDragSampleMs = nowMs;
     }
 
     @Override
@@ -1328,8 +1462,10 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         }
         clicked = false;
 
+        final boolean dragged = Math.abs(totalDragX) > DRAG_CLICK_THRESHOLD_BLOCKS || Math.abs(totalDragZ) > DRAG_CLICK_THRESHOLD_BLOCKS;
+
         // Check if dragged was minimal
-        if (Math.abs(totalDragX) <= 4 && Math.abs(totalDragZ) <= 4) {
+        if (!dragged) {
             HoverInfo hoverInfo = hoveredBiome(event.x(), event.y());
             if (hoverInfo == null || hoverInfo.entry == null) {
                 return;
@@ -1348,6 +1484,24 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
 
         totalDragX = 0;
         totalDragZ = 0;
+        dragVelocityBlocksX = 0.0;
+        dragVelocityBlocksZ = 0.0;
+        lastDragSampleMs = 0L;
+
+        if (dragged) {
+            // Restart pass immediately at the finalized center to avoid visible black regions lingering after fast drags.
+            textureRenderInProgress = false;
+            textureRenderSectionCursor = 0;
+            textureRenderXCursor = Integer.MIN_VALUE;
+            texturePassState = null;
+            dragBurstUntilMs = System.currentTimeMillis() + DRAG_RENDER_BURST_DURATION_MS;
+
+            // Queue generation immediately instead of waiting for periodic refresh.
+            queueGeneration();
+            lastQueuedState = currentRenderState();
+            lastQueueRefreshMs = System.currentTimeMillis();
+            lastTextureRefreshMs = 0L;
+        }
     }
 
     @Override

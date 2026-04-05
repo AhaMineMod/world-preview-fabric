@@ -47,6 +47,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 
 import static caeruleusTait.world.preview.WorldPreview.LOGGER;
@@ -84,6 +86,9 @@ public class WorkManager {
 
     private boolean queueIsRunning = false;
     private boolean shouldEarlyAbortQueuing = false;
+    private final AtomicInteger structureUnitsTotal = new AtomicInteger(0);
+    private final AtomicInteger structureUnitsCompleted = new AtomicInteger(0);
+    private final AtomicLong renderDataVersion = new AtomicLong(0L);
 
     public WorkManager(RenderSettings renderSettings, WorldPreviewConfig config) {
         this.config = config;
@@ -214,6 +219,9 @@ public class WorkManager {
         executorService = null;
         queueChunksService = null;
         previewStorageCacheManager = null;
+        structureUnitsTotal.set(0);
+        structureUnitsCompleted.set(0);
+        renderDataVersion.incrementAndGet();
     }
 
     private boolean requeueOnYOnlyChange() {
@@ -289,12 +297,20 @@ public class WorkManager {
         int units = 0;
 
         // Main biomes
-        units += queueForLevel(chunks, topLeftBlock.getY(), 4096, this::workUnitFactory);
+        final int mainBiomeUnits = queueForLevel(chunks, topLeftBlock.getY(), 4096, this::workUnitFactory);
+        units += mainBiomeUnits;
 
         // Structures
+        final int structureUnits;
         if (config.sampleStructures && !shouldEarlyAbortQueuing) {
-            units += queueForLevel(chunks, 0, 256, (pos, y) -> new StructStartWorkUnit(sampleUtils, pos, previewData));
+            // Keep structure tasks fine-grained to improve parallelism and responsiveness while panning.
+            structureUnits = queueForLevel(chunks, 0, 1, (pos, y) -> new StructStartWorkUnit(sampleUtils, pos, previewData));
+            units += structureUnits;
+        } else {
+            structureUnits = 0;
         }
+        structureUnitsTotal.set(structureUnits);
+        structureUnitsCompleted.set(0);
 
         final int sectionSizeExponent = PreviewSection.SHIFT - PreviewSection.QUART_TO_SECTION_SHIFT;
         final int numChunksPerSection = PreviewSection.SECTION_SIZE >> (sectionSizeExponent - 4);
@@ -302,17 +318,21 @@ public class WorkManager {
         // Height map
         if (config.sampleHeightmap && !shouldEarlyAbortQueuing && sampleUtils.noiseGeneratorSettings() != null) {
             List<ChunkPos> heightMapChunks = uniqueSectionAlignedChunks(chunks);
-            units += queueForLevel(heightMapChunks, 0, 1, (pos, y) -> new HeightmapWorkUnit(chunkSampler, sampleUtils, pos, numChunksPerSection, previewData));
+            final int heightUnits = queueForLevel(heightMapChunks, 0, 1, (pos, y) -> new HeightmapWorkUnit(chunkSampler, sampleUtils, pos, numChunksPerSection, previewData));
+            units += heightUnits;
         } else if (config.sampleHeightmap && !shouldEarlyAbortQueuing) {
-            units += queueForLevel(chunks, 0, 64, (pos, y) -> new SlowHeightmapWorkUnit(chunkSampler, sampleUtils, pos, previewData));
+            final int heightUnits = queueForLevel(chunks, 0, 64, (pos, y) -> new SlowHeightmapWorkUnit(chunkSampler, sampleUtils, pos, previewData));
+            units += heightUnits;
         }
 
         // Intersections
         if (config.sampleIntersections && !shouldEarlyAbortQueuing && sampleUtils.noiseGeneratorSettings() != null) {
             List<ChunkPos> intersectChunks = uniqueSectionAlignedChunks(chunks);
-            units += queueForLevel(intersectChunks, 0, 1, (pos, y) -> new IntersectionWorkUnit(chunkSampler, sampleUtils, pos, numChunksPerSection, previewData, Y_BLOCK_STRIDE));
+            final int intersectUnits = queueForLevel(intersectChunks, 0, 1, (pos, y) -> new IntersectionWorkUnit(chunkSampler, sampleUtils, pos, numChunksPerSection, previewData, Y_BLOCK_STRIDE));
+            units += intersectUnits;
         } else if (config.sampleIntersections && !shouldEarlyAbortQueuing) {
-            units += queueForLevel(chunks, 0, 64, (pos, y) -> new SlowIntersectionWorkUnit(chunkSampler, sampleUtils, pos, previewData, yMin(), yMax(), Y_BLOCK_STRIDE));
+            final int intersectUnits = queueForLevel(chunks, 0, 64, (pos, y) -> new SlowIntersectionWorkUnit(chunkSampler, sampleUtils, pos, previewData, yMin(), yMax(), Y_BLOCK_STRIDE));
+            units += intersectUnits;
         }
 
         // Now sample adjacent levels
@@ -321,7 +341,8 @@ public class WorkManager {
                 if (shouldEarlyAbortQueuing) {
                     break;
                 }
-                units += queueForLevel(chunks, y, 4096, this::workUnitFactory);
+                final int layerUnits = queueForLevel(chunks, y, 4096, this::workUnitFactory);
+                units += layerUnits;
             }
         }
 
@@ -472,5 +493,31 @@ public class WorkManager {
 
     public SampleUtils sampleUtils() {
         return sampleUtils;
+    }
+
+    public void onWorkUnitCompleted(long flags) {
+        renderDataVersion.incrementAndGet();
+        if ((flags & PreviewStorage.FLAG_STRUCT_START) != 0L) {
+            final int total = structureUnitsTotal.get();
+            if (total <= 0) {
+                return;
+            }
+            structureUnitsCompleted.updateAndGet(x -> Math.min(total, x + 1));
+        }
+    }
+
+    public float structureGenerationProgress() {
+        if (!config.sampleStructures) {
+            return 1.0f;
+        }
+        final int total = structureUnitsTotal.get();
+        if (total <= 0) {
+            return 1.0f;
+        }
+        return Math.clamp(structureUnitsCompleted.get() / (float) total, 0.0f, 1.0f);
+    }
+
+    public long renderDataVersion() {
+        return renderDataVersion.get();
     }
 }

@@ -1,6 +1,5 @@
 package caeruleusTait.world.preview.mixin;
 
-import caeruleusTait.world.preview.WorldPreview;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -15,9 +14,8 @@ public abstract class StructureTemplatePaletteMixin {
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void threadSafeCache(List<StructureTemplate.StructureBlockInfo> list, CallbackInfo ci) {
-        if (WorldPreview.get() != null && WorldPreview.get().workManager().isSetup()) {
-            ((StructureTemplatePaletteAccessor) this).setCache(new ConcurrentHashMap<>());
-        }
+        // Palette cache is accessed during structure generation and must be concurrent-safe.
+        ((StructureTemplatePaletteAccessor) this).setCache(new ConcurrentHashMap<>());
     }
 
 }
