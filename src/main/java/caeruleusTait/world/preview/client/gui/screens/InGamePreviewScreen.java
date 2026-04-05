@@ -26,6 +26,7 @@ import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.storage.LevelResource;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.security.InvalidParameterException;
 
@@ -35,6 +36,7 @@ public class InGamePreviewScreen extends Screen implements PreviewContainerDataP
 
     private IntegratedServer integratedServer;
     private PreviewContainer previewContainer;
+    private boolean pendingContainerStart = false;
     private final WorldPreview worldPreview = WorldPreview.get();
 
     public InGamePreviewScreen() {
@@ -52,7 +54,7 @@ public class InGamePreviewScreen extends Screen implements PreviewContainerDataP
 
         if (previewContainer == null) {
             previewContainer = new PreviewContainer(this, this);
-            previewContainer.start();
+            pendingContainerStart = true;
         }
 
         previewContainer.widgets().forEach(this::addRenderableWidget);
@@ -75,7 +77,18 @@ public class InGamePreviewScreen extends Screen implements PreviewContainerDataP
     }
 
     @Override
+    public void tick() {
+        super.tick();
+        if (!pendingContainerStart || previewContainer == null) {
+            return;
+        }
+        pendingContainerStart = false;
+        previewContainer.start();
+    }
+
+    @Override
     public void onClose() {
+        pendingContainerStart = false;
         worldPreview.saveConfig();
         previewContainer.close();
         super.onClose();
@@ -85,7 +98,11 @@ public class InGamePreviewScreen extends Screen implements PreviewContainerDataP
     public Path cacheDir() {
         final var access = ((MinecraftServerAccessor) integratedServer).getStorageSource();
         final Path previewDir = access.getLevelPath(LevelResource.ROOT).resolve("world-preview");
-        previewDir.toFile().mkdirs();
+        try {
+            java.nio.file.Files.createDirectories(previewDir);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to create preview cache directory", e);
+        }
         return previewDir;
     }
 

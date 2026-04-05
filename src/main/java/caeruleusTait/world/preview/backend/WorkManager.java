@@ -43,10 +43,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.SplittableRandom;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
@@ -56,6 +58,7 @@ import static caeruleusTait.world.preview.WorldPreview.LOGGER;
 public class WorkManager {
     public static final int Y_BLOCK_SHIFT = 3;
     public static final int Y_BLOCK_STRIDE = 1 << Y_BLOCK_SHIFT;
+    private static final long CANCEL_WAIT_MS = 25L;
 
     private final Object completedSynchro = new Object();
 
@@ -158,70 +161,133 @@ public class WorkManager {
         queueChunksService = Executors.newSingleThreadExecutor();
     }
 
-    private void shutdownExecutors() {
-        if (executorService == null) {
-            return;
-        }
-
+    private void cancelOutstandingWork() {
         shouldEarlyAbortQueuing = true;
 
         synchronized (currentBatches) {
             currentBatches.forEach(WorkBatch::cancel);
             currentBatches.clear();
         }
-        try {
-            List<Future<?>> allFutures = new ArrayList<>();
-            synchronized (futures) {
-                allFutures.addAll(queueFutures);
-                allFutures.addAll(futures);
-            }
-            for (Future<?> f : allFutures) {
-                f.get();
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(e);
-        }
 
-        executorService.shutdownNow();
-        queueChunksService.shutdownNow();
+        List<Future<?>> allFutures = new ArrayList<>();
+        synchronized (futures) {
+            allFutures.addAll(queueFutures);
+            allFutures.addAll(futures);
+            queueFutures.clear();
+            futures.clear();
+        }
+        allFutures.forEach(f -> f.cancel(true));
     }
 
-    public void cancel() {
-        shutdownExecutors();
+    private static boolean awaitTermination(@Nullable ExecutorService executorService) {
+        if (executorService == null) {
+            return true;
+        }
+        try {
+            return executorService.awaitTermination(CANCEL_WAIT_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
 
-        if (sampleUtils != null) {
-            try {
-                sampleUtils.close();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+    private static void awaitTerminationUninterruptibly(@Nullable ExecutorService executorService) {
+        if (executorService == null) {
+            return;
+        }
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    if (executorService.awaitTermination(1L, TimeUnit.SECONDS)) {
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private static void closeSampleUtils(@Nullable SampleUtils sampleUtils) {
+        if (sampleUtils == null) {
+            return;
+        }
+        try {
+            sampleUtils.close();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void finishCancelCleanup(
+            @Nullable ExecutorService executorService,
+            @Nullable ExecutorService queueChunksService,
+            @Nullable SampleUtils sampleUtils,
+            @Nullable PreviewStorageCacheManager cacheManager,
+            @Nullable PreviewStorage storage,
+            long seed
+    ) {
+        Runnable cleanup = () -> {
+            awaitTerminationUninterruptibly(executorService);
+            awaitTerminationUninterruptibly(queueChunksService);
+            closeSampleUtils(sampleUtils);
+            if (cacheManager != null) {
+                cacheManager.storePreviewStorageAsync(seed, storage);
+            }
+        };
+
+        final boolean workersStopped = awaitTermination(executorService)
+                && awaitTermination(queueChunksService);
+        if (workersStopped) {
+            cleanup.run();
+            return;
+        }
+        CompletableFuture.runAsync(cleanup);
+    }
+
+    public synchronized void cancel() {
+        final ExecutorService workerExecutor = this.executorService;
+        final ExecutorService queueExecutor = this.queueChunksService;
+        if (workerExecutor != null) {
+            cancelOutstandingWork();
+            workerExecutor.shutdownNow();
+            if (queueExecutor != null) {
+                queueExecutor.shutdownNow();
             }
         }
 
-        if (previewStorageCacheManager != null) {
-            final PreviewStorageCacheManager cacheManager = previewStorageCacheManager;
-            final PreviewStorage storage = previewStorage;
-            final long seed = worldOptions.seed();
-            cacheManager.storePreviewStorageAsync(seed, storage);
-        }
+        final SampleUtils sampleUtilsToClose = this.sampleUtils;
+        final PreviewStorageCacheManager cacheManager = this.previewStorageCacheManager;
+        final PreviewStorage storage = this.previewStorage;
+        final long seed = worldOptions == null ? 0L : worldOptions.seed();
 
         worldOptions = null;
         levelStem = null;
         dimensionType = null;
         chunkGenerator = null;
-        sampleUtils = null;
+        this.sampleUtils = null;
         previewStorage = null;
         lastQueuedTopLeft = null;
         lastQueuedBotRight = null;
         lastY = Integer.MIN_VALUE;
         queueIsRunning = false;
         futures.clear();
-        executorService = null;
-        queueChunksService = null;
+        queueFutures.clear();
+        this.executorService = null;
+        this.queueChunksService = null;
         previewStorageCacheManager = null;
         structureUnitsTotal.set(0);
         structureUnitsCompleted.set(0);
         renderDataVersion.incrementAndGet();
+
+        if (workerExecutor != null || queueExecutor != null || sampleUtilsToClose != null || cacheManager != null) {
+            finishCancelCleanup(workerExecutor, queueExecutor, sampleUtilsToClose, cacheManager, storage, seed);
+        }
     }
 
     private boolean requeueOnYOnlyChange() {

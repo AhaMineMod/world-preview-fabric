@@ -47,7 +47,7 @@ import static caeruleusTait.world.preview.client.WorldPreviewComponents.MSG_ERRO
 import static caeruleusTait.world.preview.client.WorldPreviewComponents.MSG_PREVIEW_SETUP_LOADING;
 
 public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
-    private static final double MIN_ZOOM_FACTOR = 0.25;
+    private static final double MIN_ZOOM_FACTOR = 0.5;
     private static final double MAX_ZOOM_FACTOR = 16.0;
     private static final double ZOOM_SCROLL_FACTOR = 1.1;
     private static final int STRUCTURE_ICON_TARGET_SIZE_GUI = 14;
@@ -857,6 +857,11 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     }
 
     private List<RenderHelper> generateRenderData() {
+        final PreviewStorage storage = workManager.previewStorage();
+        if (storage == null) {
+            return List.of();
+        }
+
         final BlockPos center = center();
         final int xMin = minBlockX(center);
         final int xMax = maxBlockX(center);
@@ -878,8 +883,6 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         int quartZ = minQuartZ;
 
         final List<RenderHelper> res = new ArrayList<>(((quartsInWidth / PreviewSection.SIZE) + 2) * ((quartsInHeight / PreviewSection.SIZE) + 2));
-
-        PreviewStorage storage = workManager.previewStorage();
 
         // Load sections
         synchronized (storage) {
@@ -1250,7 +1253,8 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
     }
 
     private HoverInfo hoveredBiome(double mouseX, double mouseY) {
-        if (!isHovered || workManager.previewStorage() == null) {
+        final PreviewStorage storage = workManager.previewStorage();
+        if (!isHovered || storage == null) {
             return null;
         }
         int guiScale = (int) minecraft.getWindow().getGuiScale();
@@ -1266,8 +1270,8 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         int quartX = QuartPos.fromBlock(xMin + xPos);
         int quartY = QuartPos.fromBlock(center.getY());
         int quartZ = QuartPos.fromBlock(zMin + zPos);
-        short biome = workManager.previewStorage().getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_BIOME);
-        short height = workManager.previewStorage().getRawData4(quartX, 0, quartZ, PreviewStorage.FLAG_HEIGHT);
+        short biome = storage.getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_BIOME);
+        short height = storage.getRawData4(quartX, 0, quartZ, PreviewStorage.FLAG_HEIGHT);
 
         if (biome < 0) {
             return new HoverInfo(
@@ -1276,12 +1280,12 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
             );
         }
 
-        final short temperature = workManager.previewStorage().getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_TEMPERATURE);
-        final short humidity = workManager.previewStorage().getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_HUMIDITY);
-        final short continentalness = workManager.previewStorage().getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_CONTINENTALNESS);
-        final short erosion = workManager.previewStorage().getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_EROSION);
-        final short depth = workManager.previewStorage().getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_DEPTH);
-        final short weirdness = workManager.previewStorage().getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_WEIRDNESS);
+        final short temperature = storage.getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_TEMPERATURE);
+        final short humidity = storage.getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_HUMIDITY);
+        final short continentalness = storage.getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_CONTINENTALNESS);
+        final short erosion = storage.getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_EROSION);
+        final short depth = storage.getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_DEPTH);
+        final short weirdness = storage.getRawData4(quartX, quartY, quartZ, PreviewStorage.FLAG_NOISE_WEIRDNESS);
 
         if (temperature == Short.MIN_VALUE && humidity == Short.MIN_VALUE && continentalness == Short.MIN_VALUE && erosion == Short.MIN_VALUE && depth == Short.MIN_VALUE && weirdness == Short.MIN_VALUE) {
             return new HoverInfo(
