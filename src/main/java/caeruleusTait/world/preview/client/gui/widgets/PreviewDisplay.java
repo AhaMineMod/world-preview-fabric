@@ -312,6 +312,13 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
         );
     }
 
+    private boolean hasCoreRenderData() {
+        return workingVisibleBiomes != null
+                && colorMap != null
+                && colorMapGrayScale != null
+                && cavesMap != null;
+    }
+
     @Override
     public void renderWidget(GuiGraphics guiGraphics, int x, int y, float f) {
         final int colorBorder = 0xFF666666;
@@ -349,7 +356,7 @@ public class PreviewDisplay extends AbstractWidget implements AutoCloseable {
                     final int offsetY = i * (minecraft.font.lineHeight + 4);
                     guiGraphics.drawCenteredString(minecraft.font, line, centerX, centerY + offsetY, 0xFFFFFFFF);
                 }
-            } else if (dataProvider.isUpdating()) {
+            } else if (dataProvider.isUpdating() || !hasCoreRenderData()) {
                 previewImg.fillRect(0, 0, texWidth, texHeight, 0xFF000000);
                 previewTexture.upload();
                 WorldPreviewClient.renderTexture(guiGraphics, previewTextureId, xMin, yMin, xMax, yMax);
