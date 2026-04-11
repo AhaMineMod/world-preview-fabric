@@ -44,6 +44,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.SplittableRandom;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -295,9 +296,16 @@ public class WorkManager {
     }
 
     public void queueRange(BlockPos topLeftBlock, BlockPos bottomRightBlock) {
+        final ExecutorService localExecutor = executorService;
+        final ExecutorService localQueueExecutor = queueChunksService;
         final ChunkPos topLeft = new ChunkPos(topLeftBlock);
         final ChunkPos bottomRight = new ChunkPos(bottomRightBlock);
-        if (executorService == null || sampleUtils == null ||
+        if (localExecutor == null
+                || localQueueExecutor == null
+                || sampleUtils == null
+                || previewStorage == null
+                || previewData == null
+                ||
                 (
                         topLeft.equals(lastQueuedTopLeft)
                         && bottomRight.equals(lastQueuedBotRight)
@@ -321,7 +329,7 @@ public class WorkManager {
         lastQueuedBotRight = bottomRight;
         lastY = topLeftBlock.getY();
         synchronized (futures) {
-            queueFutures.add(queueChunksService.submit(() -> queueRangeWrapper(topLeftBlock, bottomRightBlock)));
+            queueFutures.add(localQueueExecutor.submit(() -> queueRangeWrapper(topLeftBlock, bottomRightBlock)));
         }
     }
 
@@ -338,6 +346,9 @@ public class WorkManager {
     }
 
     public void queueRangeReal(BlockPos topLeftBlock, BlockPos bottomRightBlock) {
+        if (executorService == null || sampleUtils == null || previewStorage == null || previewData == null) {
+            return;
+        }
         final Instant start = Instant.now();
         final ChunkPos topLeft = new ChunkPos(topLeftBlock);
         final ChunkPos bottomRight = new ChunkPos(bottomRightBlock);
@@ -351,11 +362,17 @@ public class WorkManager {
             for (Future<?> f : futures) {
                 try {
                     f.get();
+                } catch (CancellationException ignored) {
+                    // Work was canceled while tearing down; expected during screen/world close.
                 } catch (InterruptedException | ExecutionException e) {
                     throw new RuntimeException(e);
                 }
             }
             futures.clear();
+        }
+
+        if (executorService == null || sampleUtils == null || previewStorage == null || previewData == null) {
+            return;
         }
 
         // Calculate new batches

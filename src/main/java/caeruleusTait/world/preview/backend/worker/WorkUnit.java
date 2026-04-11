@@ -25,11 +25,18 @@ public abstract class WorkUnit {
     protected WorkUnit(SampleUtils sampleUtils, ChunkPos chunkPos, PreviewData previewData, int y) {
         this.workManager = WorldPreview.get().workManager();
         this.sampleUtils = sampleUtils;
-        this.storage = workManager.previewStorage();
-        this.primarySection = storage.section4(chunkPos, y, flags());
         this.chunkPos = chunkPos;
         this.previewData = previewData;
         this.y = y;
+
+        this.storage = workManager.previewStorage();
+        if (this.storage == null) {
+            // Can happen during teardown race while queued work is still being constructed.
+            this.primarySection = null;
+            this.isCanceled = true;
+            return;
+        }
+        this.primarySection = storage.section4(chunkPos, y, flags());
     }
 
     public short biomeIdFrom(ResourceKey<Biome> resourceKey) {
@@ -47,14 +54,19 @@ public abstract class WorkUnit {
     public abstract long flags();
 
     public boolean isCompleted() {
-        return primarySection.isCompleted(chunkPos);
+        return primarySection == null || primarySection.isCompleted(chunkPos);
     }
 
     public void markCompleted() {
-        primarySection.markCompleted(chunkPos);
+        if (primarySection != null) {
+            primarySection.markCompleted(chunkPos);
+        }
     }
 
     public List<WorkResult> work() {
+        if (isCanceled || primarySection == null) {
+            return List.of();
+        }
         try {
             return doWork();
         } catch (Throwable e) {
