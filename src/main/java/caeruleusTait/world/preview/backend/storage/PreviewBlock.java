@@ -2,6 +2,7 @@ package caeruleusTait.world.preview.backend.storage;
 
 import caeruleusTait.world.preview.WorldPreview;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -32,6 +33,11 @@ public class PreviewBlock implements Serializable {
             section = sections[idx] = sectionFactory(quartX, quartZ);
         }
         return section;
+    }
+
+    public synchronized @Nullable PreviewSection getExisting(int quartX, int quartZ) {
+        final int idx = (((quartX >> PreviewSection.SHIFT) & PREVIEW_BLOCK_MASK) * PREVIEW_BLOCK_SIZE) + ((quartZ >> PreviewSection.SHIFT) & PREVIEW_BLOCK_MASK);
+        return sections[idx];
     }
 
     private PreviewSection sectionFactory(int quartX, int quartZ) {

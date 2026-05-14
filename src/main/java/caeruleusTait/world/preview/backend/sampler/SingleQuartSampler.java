@@ -6,15 +6,13 @@ import net.minecraft.core.QuartPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.ChunkPos;
 
-import java.util.List;
-
 public class SingleQuartSampler implements ChunkSampler {
     @Override
-    public List<BlockPos> blocksForChunk(ChunkPos chunkPos, int y) {
+    public void forEachBlock(ChunkPos chunkPos, int y, BlockPos.MutableBlockPos cursor, BlockConsumer consumer) {
         final int xMin = SectionPos.sectionToBlockCoord(chunkPos.x, 0);
         final int zMin = SectionPos.sectionToBlockCoord(chunkPos.z, 0);
-
-        return List.of(new BlockPos(xMin, y, zMin));
+        cursor.set(xMin, y, zMin);
+        consumer.accept(cursor);
     }
 
     @Override
@@ -24,7 +22,7 @@ public class SingleQuartSampler implements ChunkSampler {
 
         for (int x = 0; x < 16 / QuartPos.SIZE; x++) {
             for (int z = 0; z < 16 / QuartPos.SIZE; z++) {
-                result.results().add(new WorkResult.BlockResult(quartX + x, quartZ + z, raw));
+                result.results().add(quartX + x, quartZ + z, raw);
             }
         }
     }

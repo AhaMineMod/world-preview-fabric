@@ -6,34 +6,28 @@ import net.minecraft.core.QuartPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.ChunkPos;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class QuarterQuartSampler implements ChunkSampler {
     @Override
-    public List<BlockPos> blocksForChunk(ChunkPos chunkPos, int y) {
-        final List<BlockPos> res = new ArrayList<>(16);
-
+    public void forEachBlock(ChunkPos chunkPos, int y, BlockPos.MutableBlockPos cursor, BlockConsumer consumer) {
         final int xMin = SectionPos.sectionToBlockCoord(chunkPos.x, 0);
         final int zMin = SectionPos.sectionToBlockCoord(chunkPos.z, 0);
 
         for (int x = 0; x < 16; x += QuartPos.SIZE * 2) {
             for (int z = 0; z < 16; z += QuartPos.SIZE * 2) {
-                res.add(new BlockPos(xMin + x, y, zMin + z));
+                cursor.set(xMin + x, y, zMin + z);
+                consumer.accept(cursor);
             }
         }
-
-        return res;
     }
 
     @Override
     public void expandRaw(BlockPos pos, short raw, WorkResult result) {
         final int quartX = QuartPos.fromBlock(pos.getX());
         final int quartZ = QuartPos.fromBlock(pos.getZ());
-        result.results().add(new WorkResult.BlockResult(quartX + 0, quartZ + 0, raw));
-        result.results().add(new WorkResult.BlockResult(quartX + 0, quartZ + 1, raw));
-        result.results().add(new WorkResult.BlockResult(quartX + 1, quartZ + 0, raw));
-        result.results().add(new WorkResult.BlockResult(quartX + 1, quartZ + 1, raw));
+        result.results().add(quartX, quartZ, raw);
+        result.results().add(quartX, quartZ + 1, raw);
+        result.results().add(quartX + 1, quartZ, raw);
+        result.results().add(quartX + 1, quartZ + 1, raw);
     }
 
     @Override

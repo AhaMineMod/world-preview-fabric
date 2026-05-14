@@ -1,35 +1,37 @@
 package caeruleusTait.world.preview.backend.worker;
 
-import caeruleusTait.world.preview.WorldPreview;
-import caeruleusTait.world.preview.backend.WorkManager;
+import caeruleusTait.world.preview.WorldPreviewConfig;
 import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.storage.PreviewSection;
 import caeruleusTait.world.preview.backend.storage.PreviewStorage;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.biome.Biome;
 
 import java.util.List;
 
+import static caeruleusTait.world.preview.WorldPreview.LOGGER;
+
 public abstract class WorkUnit {
-    protected final WorkManager workManager;
+    protected final PreviewWorkContext context;
     protected final SampleUtils sampleUtils;
     protected final PreviewStorage storage;
     protected final PreviewSection primarySection;
     protected final ChunkPos chunkPos;
     protected final PreviewData previewData;
+    protected final WorldPreviewConfig config;
     protected final int y;
-    private boolean isCanceled;
+    private volatile boolean isCanceled;
 
-    protected WorkUnit(SampleUtils sampleUtils, ChunkPos chunkPos, PreviewData previewData, int y) {
-        this.workManager = WorldPreview.get().workManager();
-        this.sampleUtils = sampleUtils;
+    protected WorkUnit(PreviewWorkContext context, ChunkPos chunkPos, int y) {
+        this.context = context;
+        this.sampleUtils = context.sampleUtils();
         this.chunkPos = chunkPos;
-        this.previewData = previewData;
+        this.previewData = context.previewData();
+        this.config = context.config();
         this.y = y;
 
-        this.storage = workManager.previewStorage();
+        this.storage = context.storage();
         if (this.storage == null) {
             // Can happen during teardown race while queued work is still being constructed.
             this.primarySection = null;
@@ -41,9 +43,6 @@ public abstract class WorkUnit {
 
     public short biomeIdFrom(ResourceKey<Biome> resourceKey) {
         return previewData.biome2Id().getShort(resourceKey.identifier().toString());
-    }
-    public short biomeIdFrom(Identifier location) {
-        return previewData.biome2Id().getShort(location.toString());
     }
 
     /**
@@ -70,7 +69,7 @@ public abstract class WorkUnit {
         try {
             return doWork();
         } catch (Throwable e) {
-            e.printStackTrace();
+            LOGGER.error("Unhandled error while processing preview work unit", e);
             throw e;
         }
     }

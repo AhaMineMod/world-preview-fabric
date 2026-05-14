@@ -1,6 +1,5 @@
 package caeruleusTait.world.preview.backend.worker;
 
-import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.sampler.ChunkSampler;
 import caeruleusTait.world.preview.backend.storage.PreviewStorage;
 import net.minecraft.core.BlockPos;
@@ -20,14 +19,13 @@ public class SlowIntersectionWorkUnit extends WorkUnit {
 
     public SlowIntersectionWorkUnit(
             ChunkSampler sampler,
-            SampleUtils sampleUtils,
+            PreviewWorkContext context,
             ChunkPos chunkPos,
-            PreviewData previewData,
             int yMin,
             int yMax,
             int yStride
     ) {
-        super(sampleUtils, chunkPos, previewData, 0);
+        super(context, chunkPos, 0);
         this.sampler = sampler;
         this.yMin = yMin;
         this.yMax = yMax;
@@ -35,6 +33,7 @@ public class SlowIntersectionWorkUnit extends WorkUnit {
     }
 
     @Override
+    @SuppressWarnings("DataFlowIssue")
     protected List<WorkResult> doWork() {
         final List<WorkResult> results = new ArrayList<>((yMax - yMin) / yStride);
 
@@ -45,16 +44,17 @@ public class SlowIntersectionWorkUnit extends WorkUnit {
                             this,
                             QuartPos.fromBlock(y),
                             y == this.y ? primarySection : storage.section4(chunkPos, y, flags()),
-                            new ArrayList<>(16),
+                            new WorkResult.BlockResults(16),
                             List.of()
                     )
             );
         }
 
         // Do the actual work
-        for (BlockPos p : sampler.blocksForChunk(chunkPos, 0)) {
+        final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        sampler.forEachBlock(chunkPos, 0, cursor, p -> {
             if (isCanceled()) {
-                break;
+                return;
             }
             final NoiseColumn nc = sampleUtils.doIntersectionsSlow(p);
             short lastColorId = 0;
@@ -74,7 +74,7 @@ public class SlowIntersectionWorkUnit extends WorkUnit {
                 // Set value
                 sampler.expandRaw(p, currId, res);
             }
-        }
+        });
         return results;
     }
 

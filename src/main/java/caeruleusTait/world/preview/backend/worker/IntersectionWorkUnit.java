@@ -1,12 +1,10 @@
 package caeruleusTait.world.preview.backend.worker;
 
-import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.sampler.ChunkSampler;
 import caeruleusTait.world.preview.backend.storage.PreviewStorage;
 import caeruleusTait.world.preview.mixin.NoiseChunkAccessor;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.QuartPos;
-import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.NoiseChunk;
@@ -15,7 +13,6 @@ import net.minecraft.world.level.levelgen.NoiseSettings;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class IntersectionWorkUnit extends WorkUnit {
     private final ChunkSampler sampler;
@@ -24,23 +21,19 @@ public class IntersectionWorkUnit extends WorkUnit {
 
     public IntersectionWorkUnit(
             ChunkSampler sampler,
-            SampleUtils sampleUtils,
+            PreviewWorkContext context,
             ChunkPos chunkPos,
             int numChunks,
-            PreviewData previewData,
             int yStride
     ) {
-        super(sampleUtils, chunkPos, previewData, 0);
+        super(context, chunkPos, 0);
         this.sampler = sampler;
         this.numChunks = numChunks;
         this.yStride = yStride;
     }
 
-    private record XZPair(int x, double dX, int z, double dZ, AtomicInteger mutableLastValue) {
-        // record
-    }
-
     @Override
+    @SuppressWarnings("DataFlowIssue")
     protected List<WorkResult> doWork() {
         final NoiseGeneratorSettings noiseGeneratorSettings = sampleUtils.noiseGeneratorSettings();
 
@@ -57,14 +50,18 @@ public class IntersectionWorkUnit extends WorkUnit {
         final int cellWidth = noiseSettings.getCellWidth();
         final int cellHeight = noiseSettings.getCellHeight();
 
-        final int cellMinY = Mth.floorDiv(yMin, noiseSettings.getCellHeight());
-        final int cellCountY = Mth.floorDiv(noiseSettings.height(), noiseSettings.getCellHeight());
+        final int cellCountY = Math.floorDiv(noiseSettings.height(), noiseSettings.getCellHeight());
 
         final int minBlockX = chunkPos.getMinBlockX();
         final int minBlockZ = chunkPos.getMinBlockZ();
         final int cellCountXZ = (16 * numChunks) / cellWidth;
         final int cellStrideXZ = Math.max(1, sampler.blockStride() / cellWidth);
         final int todoArraySize = Math.max(1, cellWidth / sampler.blockStride()) * Math.max(1, cellWidth / sampler.blockStride());
+        final int[] posX = new int[todoArraySize];
+        final int[] posZ = new int[todoArraySize];
+        final double[] posDX = new double[todoArraySize];
+        final double[] posDZ = new double[todoArraySize];
+        final short[] lastValues = new short[todoArraySize];
 
         final List<WorkResult> results = new ArrayList<>((yMax - yMin) / yStride);
 
@@ -75,7 +72,7 @@ public class IntersectionWorkUnit extends WorkUnit {
                             this,
                             QuartPos.fromBlock(y),
                             y == this.y ? primarySection : storage.section4(chunkPos, y, flags()),
-                            new ArrayList<>(numChunks * numChunks * 4 * 4),
+                            new WorkResult.BlockResults(numChunks * numChunks * 4 * 4),
                             List.of()
                     )
             );
@@ -90,16 +87,15 @@ public class IntersectionWorkUnit extends WorkUnit {
 
                 for(int cellZ = 0; cellZ < cellCountXZ && !isCanceled(); cellZ += cellStrideXZ) {
 
-                    List<XZPair> positions = new ArrayList<>(todoArraySize);
+                    int activePositions = 0;
                     for (int xInCell = 0; xInCell < cellWidth; xInCell += sampler.blockStride()) {
                         for (int zInCell = 0; zInCell < cellWidth; zInCell += sampler.blockStride()) {
-                            int x = minBlockX + cellX * cellWidth + xInCell;
-                            int z = minBlockZ + cellZ * cellWidth + zInCell;
-                            positions.add(new XZPair(
-                                    x, (double) xInCell / (double) cellWidth,
-                                    z, (double) zInCell / (double) cellWidth,
-                                    new AtomicInteger(0)
-                            ));
+                            posX[activePositions] = minBlockX + cellX * cellWidth + xInCell;
+                            posZ[activePositions] = minBlockZ + cellZ * cellWidth + zInCell;
+                            posDX[activePositions] = (double) xInCell / (double) cellWidth;
+                            posDZ[activePositions] = (double) zInCell / (double) cellWidth;
+                            lastValues[activePositions] = 0;
+                            activePositions++;
                         }
                     }
 
@@ -115,9 +111,9 @@ public class IntersectionWorkUnit extends WorkUnit {
                         lastCellY = cellY;
 
                         final WorkResult res = results.get((yTemp - yMin) / yStride);
-                        for (XZPair curr : positions) {
-                            noiseChunk.updateForX(curr.x, curr.dX);
-                            noiseChunk.updateForZ(curr.z, curr.dZ);
+                        for (int idx = 0; idx < activePositions; ++idx) {
+                            noiseChunk.updateForX(posX[idx], posDX[idx]);
+                            noiseChunk.updateForZ(posZ[idx], posDZ[idx]);
 
                             BlockState blockState = ((NoiseChunkAccessor) noiseChunk).invokeGetInterpolatedState();
                             if (blockState == null) {
@@ -125,14 +121,15 @@ public class IntersectionWorkUnit extends WorkUnit {
                             }
 
                             short colorId = (short) blockState.getMapColor(null, null).id;
-                            short lastId = (short) curr.mutableLastValue.getAndSet(colorId);
+                            short lastId = lastValues[idx];
+                            lastValues[idx] = colorId;
 
                             // Allow "seeing through" one layer of air
                             if (colorId == 0 && lastId > 0) {
                                 colorId = (short) -lastId;
                             }
 
-                            mutableBlockPos.set(curr.x, yTemp, curr.z);
+                            mutableBlockPos.set(posX[idx], yTemp, posZ[idx]);
                             sampler.expandRaw(mutableBlockPos, colorId, res);
                         }
                     }

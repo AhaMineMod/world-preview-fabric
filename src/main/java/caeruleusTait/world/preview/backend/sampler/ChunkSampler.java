@@ -4,12 +4,15 @@ import caeruleusTait.world.preview.backend.worker.WorkResult;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 
-import java.util.List;
-
 public interface ChunkSampler {
-    List<BlockPos> blocksForChunk(ChunkPos chunkPos, int y);
+    void forEachBlock(ChunkPos chunkPos, int y, BlockPos.MutableBlockPos cursor, BlockConsumer consumer);
 
     void expandRaw(BlockPos pos, short raw, WorkResult result);
 
     int blockStride();
+
+    @FunctionalInterface
+    interface BlockConsumer {
+        void accept(BlockPos pos);
+    }
 }

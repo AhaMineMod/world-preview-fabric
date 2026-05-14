@@ -1,10 +1,8 @@
 package caeruleusTait.world.preview.backend.worker;
 
-import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.sampler.ChunkSampler;
 import caeruleusTait.world.preview.backend.storage.PreviewStorage;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.QuartPos;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.ArrayList;
@@ -16,8 +14,8 @@ public class FullChunkWorkUnit extends WorkUnit {
     private final int yMax;
     private final int yStride;
 
-    public FullChunkWorkUnit(ChunkSampler sampler, ChunkPos pos, SampleUtils sampleUtils, PreviewData previewData, int yMin, int yMax, int yStride) {
-        super(sampleUtils, pos, previewData, 0);
+    public FullChunkWorkUnit(ChunkSampler sampler, ChunkPos pos, PreviewWorkContext context, int yMin, int yMax, int yStride) {
+        super(context, pos, 0);
         this.sampler = sampler;
         this.yMin = yMin;
         this.yMax = yMax;
@@ -34,53 +32,38 @@ public class FullChunkWorkUnit extends WorkUnit {
     }
 
     private List<WorkResult> doRawNoiseWork() {
-        List<WorkResult> results = new ArrayList<>((yMax - yMin) / yStride);
+        List<WorkResult> results = new ArrayList<>(((yMax - yMin) / yStride) * 7);
+        final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        final short[] noiseData = new short[NoiseSampleWriter.NOISE_FIELD_COUNT];
         for (int y = yMin; y <= yMax; y += yStride) {
-            WorkResult res             = new WorkResult(this, QuartPos.fromBlock(y), y == this.y ? primarySection : storage.section4(chunkPos, y, flags()),    new ArrayList<>(16), List.of());
-            WorkResult temperature     = new WorkResult(this, QuartPos.fromBlock(y), storage.section4(chunkPos, y, PreviewStorage.FLAG_NOISE_TEMPERATURE),     new ArrayList<>(16), List.of());
-            WorkResult humidity        = new WorkResult(this, QuartPos.fromBlock(y), storage.section4(chunkPos, y, PreviewStorage.FLAG_NOISE_HUMIDITY),        new ArrayList<>(16), List.of());
-            WorkResult continentalness = new WorkResult(this, QuartPos.fromBlock(y), storage.section4(chunkPos, y, PreviewStorage.FLAG_NOISE_CONTINENTALNESS), new ArrayList<>(16), List.of());
-            WorkResult erosion         = new WorkResult(this, QuartPos.fromBlock(y), storage.section4(chunkPos, y, PreviewStorage.FLAG_NOISE_EROSION),         new ArrayList<>(16), List.of());
-            WorkResult depth           = new WorkResult(this, QuartPos.fromBlock(y), storage.section4(chunkPos, y, PreviewStorage.FLAG_NOISE_DEPTH),           new ArrayList<>(16), List.of());
-            WorkResult weirdness       = new WorkResult(this, QuartPos.fromBlock(y), storage.section4(chunkPos, y, PreviewStorage.FLAG_NOISE_WEIRDNESS),       new ArrayList<>(16), List.of());
-            for (BlockPos p : sampler.blocksForChunk(chunkPos, y)) {
-                final var sample = sampleUtils.doSample(p);
-                sampler.expandRaw(p, biomeIdFrom(sample.biome()), res);
-                if(sample.noiseResult() != null) {
-                    sampler.expandRaw(p, sample.noiseResult()[0], temperature);
-                    sampler.expandRaw(p, sample.noiseResult()[1], humidity);
-                    sampler.expandRaw(p, sample.noiseResult()[2], continentalness);
-                    sampler.expandRaw(p, sample.noiseResult()[3], erosion);
-                    sampler.expandRaw(p, sample.noiseResult()[4], depth);
-                    sampler.expandRaw(p, sample.noiseResult()[5], weirdness);
-                }
-            }
-            results.add(res);
-            results.add(temperature);
-            results.add(humidity);
-            results.add(continentalness);
-            results.add(erosion);
-            results.add(depth);
-            results.add(weirdness);
+            List<WorkResult> yResults = NoiseSampleWriter.createResults(
+                    this,
+                    y,
+                    y == this.y ? primarySection : storage.section4(chunkPos, y, flags()),
+                    true
+            );
+            sampler.forEachBlock(chunkPos, y, cursor, p ->
+                    NoiseSampleWriter.writeSample(sampler, p, biomeIdFrom(sampleUtils.sampleBiomeAndNoise(p, noiseData)), noiseData, yResults)
+            );
+            results.addAll(yResults);
         }
         return results;
     }
 
     private List<WorkResult> doNormalWork() {
-        List<WorkResult> results = new ArrayList<>(((yMax - yMin) / yStride) * 7);
+        List<WorkResult> results = new ArrayList<>((yMax - yMin) / yStride);
+        final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         for (int y = yMin; y <= yMax; y += yStride) {
-            WorkResult res = new WorkResult(
+            List<WorkResult> yResults = NoiseSampleWriter.createResults(
                     this,
-                    QuartPos.fromBlock(y),
+                    y,
                     y == this.y ? primarySection : storage.section4(chunkPos, y, flags()),
-                    new ArrayList<>(16),
-                    List.of()
+                    false
             );
-            for (BlockPos p : sampler.blocksForChunk(chunkPos, y)) {
-                final var sample = sampleUtils.doSample(p);
-                sampler.expandRaw(p, biomeIdFrom(sample.biome()), res);
-            }
-            results.add(res);
+            sampler.forEachBlock(chunkPos, y, cursor, p ->
+                    NoiseSampleWriter.writeSample(sampler, p, biomeIdFrom(sampleUtils.sampleBiome(p)), null, yResults)
+            );
+            results.addAll(yResults);
         }
         return results;
     }

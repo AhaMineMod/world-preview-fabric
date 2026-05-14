@@ -1,7 +1,5 @@
 package caeruleusTait.world.preview.backend.worker;
 
-import caeruleusTait.world.preview.WorldPreviewConfig;
-import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.sampler.ChunkSampler;
 import caeruleusTait.world.preview.backend.storage.PreviewStorage;
 import caeruleusTait.world.preview.mixin.NoiseChunkAccessor;
@@ -15,7 +13,6 @@ import net.minecraft.world.level.levelgen.NoiseChunk;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 import net.minecraft.world.level.levelgen.NoiseSettings;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Predicate;
 
@@ -23,21 +20,16 @@ public class HeightmapWorkUnit extends WorkUnit {
     private final ChunkSampler sampler;
     private final int numChunks;
 
-    public HeightmapWorkUnit(ChunkSampler sampler, SampleUtils sampleUtils, ChunkPos chunkPos, int numChunks, PreviewData previewData) {
-        super(sampleUtils, chunkPos, previewData, 0);
+    public HeightmapWorkUnit(ChunkSampler sampler, PreviewWorkContext context, ChunkPos chunkPos, int numChunks) {
+        super(context, chunkPos, 0);
         this.sampler = sampler;
         this.numChunks = numChunks;
     }
 
-    private record XZPair(int x, double dX, int z, double dZ) {
-        // record
-    }
-
     @Override
     protected List<WorkResult> doWork() {
-        final WorkResult res = new WorkResult(this, QuartPos.fromBlock(0), primarySection, new ArrayList<>(numChunks * numChunks * 4 * 4), List.of());
+        final WorkResult res = new WorkResult(this, QuartPos.fromBlock(0), primarySection, new WorkResult.BlockResults(numChunks * numChunks * 4 * 4), List.of());
         final NoiseGeneratorSettings noiseGeneratorSettings = sampleUtils.noiseGeneratorSettings();
-        final WorldPreviewConfig config = workManager.config();
 
         if (noiseGeneratorSettings == null) {
             return List.of(res);
@@ -61,6 +53,10 @@ public class HeightmapWorkUnit extends WorkUnit {
         final int cellCountXZ = (16 * numChunks) / cellWidth;
         final int cellStrideXZ = Math.max(1, sampler.blockStride() / cellWidth);
         final int todoArraySize = Math.max(1, cellWidth / sampler.blockStride()) * Math.max(1, cellWidth / sampler.blockStride());
+        final int[] posX = new int[todoArraySize];
+        final int[] posZ = new int[todoArraySize];
+        final double[] posDX = new double[todoArraySize];
+        final double[] posDZ = new double[todoArraySize];
 
         final Predicate<BlockState> predicate = Heightmap.Types.OCEAN_FLOOR_WG.isOpaque();
 
@@ -73,30 +69,28 @@ public class HeightmapWorkUnit extends WorkUnit {
 
                 for(int cellZ = 0; cellZ < cellCountXZ && !isCanceled(); cellZ += cellStrideXZ) {
 
-                    List<XZPair> positions = new ArrayList<>(todoArraySize);
+                    int activePositions = 0;
                     for (int xInCell = 0; xInCell < cellWidth; xInCell += sampler.blockStride()) {
                         for (int zInCell = 0; zInCell < cellWidth; zInCell += sampler.blockStride()) {
-                            int x = minBlockX + cellX * cellWidth + xInCell;
-                            int z = minBlockZ + cellZ * cellWidth + zInCell;
-                            positions.add(new XZPair(
-                                    x, (double) xInCell / (double) cellWidth,
-                                    z, (double) zInCell / (double) cellWidth
-                            ));
+                            posX[activePositions] = minBlockX + cellX * cellWidth + xInCell;
+                            posZ[activePositions] = minBlockZ + cellZ * cellWidth + zInCell;
+                            posDX[activePositions] = (double) xInCell / (double) cellWidth;
+                            posDZ[activePositions] = (double) zInCell / (double) cellWidth;
+                            activePositions++;
                         }
                     }
 
-                    for(int cellY = cellCountY - 1; cellY >= 0 && !positions.isEmpty() && !isCanceled(); --cellY) {
+                    for(int cellY = cellCountY - 1; cellY >= 0 && activePositions > 0 && !isCanceled(); --cellY) {
                         noiseChunk.selectCellYZ(cellY + cellOffsetY, cellZ);
 
                         // Iterate over block in cell Y X Z
-                        for (int yInCell = cellHeight - 1; yInCell >= 0 && !positions.isEmpty(); --yInCell) {
+                        for (int yInCell = cellHeight - 1; yInCell >= 0 && activePositions > 0; --yInCell) {
                             final int y = (cellMinY + cellY) * cellHeight + yInCell;
                             noiseChunk.updateForY(y, (double) yInCell / (double) cellHeight);
 
-                            for (int idx = 0; idx < positions.size(); ++idx) {
-                                XZPair curr = positions.get(idx);
-                                noiseChunk.updateForX(curr.x, curr.dX);
-                                noiseChunk.updateForZ(curr.z, curr.dZ);
+                            for (int idx = 0; idx < activePositions; ++idx) {
+                                noiseChunk.updateForX(posX[idx], posDX[idx]);
+                                noiseChunk.updateForZ(posZ[idx], posDZ[idx]);
 
                                 BlockState blockState = ((NoiseChunkAccessor) noiseChunk).invokeGetInterpolatedState();
                                 if (blockState == null) {
@@ -104,9 +98,16 @@ public class HeightmapWorkUnit extends WorkUnit {
                                 }
 
                                 if (predicate.test(blockState)) {
-                                    mutableBlockPos.set(curr.x, 0, curr.z);
+                                    mutableBlockPos.set(posX[idx], 0, posZ[idx]);
                                     sampler.expandRaw(mutableBlockPos, (short) (y + 1), res);
-                                    positions.remove(idx--);
+                                    activePositions--;
+                                    if (idx < activePositions) {
+                                        posX[idx] = posX[activePositions];
+                                        posZ[idx] = posZ[activePositions];
+                                        posDX[idx] = posDX[activePositions];
+                                        posDZ[idx] = posDZ[activePositions];
+                                    }
+                                    idx--;
                                 }
                             }
                         }

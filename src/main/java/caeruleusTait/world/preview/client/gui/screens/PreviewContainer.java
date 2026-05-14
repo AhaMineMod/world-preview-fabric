@@ -38,8 +38,6 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.packs.resources.Resource;
-import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -51,27 +49,17 @@ import net.minecraft.world.level.levelgen.structure.Structure;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 
 import static caeruleusTait.world.preview.RenderSettings.RenderMode.*;
 import static caeruleusTait.world.preview.WorldPreview.LOGGER;
@@ -138,8 +126,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
     private boolean inhibitUpdates = true;
     private boolean isUpdating = false;
     private boolean setupFailed = false;
-    private final Executor reloadExecutor = Executors.newSingleThreadExecutor();
-    private final AtomicInteger reloadRevision = new AtomicInteger(0);
+    private final PreviewReloadController reloadController = new PreviewReloadController();
 
     private final List<AbstractWidget> toRender = new ArrayList<>();
 
@@ -161,9 +148,6 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         seedEdit.setTooltip(Tooltip.create(SEED_LABEL));
         seedEdit.active = dataProvider.seedIsEditable();
         toRender.add(seedEdit);
-
-        // seedLabel = new WGLabel(font, 0, 0, 100, LINE_HEIGHT, WGLabel.TextAlignment.LEFT, SEED_LABEL, 0xFFFFFF);
-        // toRender.add(seedLabel);
 
         randomSeedButton = new OldStyleImageButton(
                 0, 0, 20, 20, /* x, y, width, height */
@@ -406,40 +390,21 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         }
         inhibitUpdates = true;
         try {
-            final int revision;
-            synchronized (reloadRevision) {
-                revision = reloadRevision.incrementAndGet();
-            }
             isUpdating = true;
-            CompletableFuture
-                    .supplyAsync(() -> {
-                        // Check if we are the latest update
-                        if (reloadRevision.get() > revision) {
-                            return null;
-                        }
-                        return dataProvider.previewWorldCreationContext();
-                    }, reloadExecutor)
-                    .thenAcceptAsync(x -> {
-                        // Check if we are the latest update
-                        if (reloadRevision.get() > revision) {
-                            return;
-                        }
-                        updateSettings_real(x);
-                        synchronized (reloadRevision) {
-                            if (reloadRevision.get() <= revision) {
-                                isUpdating = false;
-                            }
-                        }
-                    }, minecraft)
-                    .handle((r, e) -> {
+            reloadController.reload(
+                    minecraft,
+                    dataProvider::previewWorldCreationContext,
+                    this::updateSettings_real,
+                    e -> {
+                        isUpdating = false;
                         if (e == null) {
                             setupFailed = false;
                         } else {
-                            e.printStackTrace();
+                            LOGGER.error("Unable to update world preview settings", e);
                             setupFailed = true;
                         }
-                        return null;
-                    });
+                    }
+            );
         } finally {
             inhibitUpdates = false;
         }
@@ -467,7 +432,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         Registry<Biome> biomeRegistry = dataProvider.registryAccess(wcContext).lookupOrThrow(Registries.BIOME);
         Registry<Structure> strucutreRegistry = dataProvider.registryAccess(wcContext).lookupOrThrow(Registries.STRUCTURE);
         levelStemRegistry = dataProvider.levelStemRegistry(wcContext);
-        levelStemKeys = levelStemRegistry.keySet().stream().sorted(Comparator.comparing(Object::toString)).toList();
+        levelStemKeys = PreviewDataModel.sortedLevelStemKeys(levelStemRegistry);
 
         // Now that the level stem keys are loaded, allow the user to go into properties!
         settings.active = true;
@@ -480,23 +445,17 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
             }
         }
         LevelStem levelStem = levelStemRegistry.getValue(renderSettings.dimension);
-
-        Set<Identifier> caveBiomes = new HashSet<>();
-        for (TagKey<Biome> tagKey : List.of(C_CAVE, C_IS_CAVE, FORGE_CAVE, FORGE_IS_CAVE)) {
-            caveBiomes.addAll(
-                    StreamSupport.stream(biomeRegistry.getTagOrEmpty(tagKey).spliterator(), false)
-                            .map(x -> x.unwrapKey().orElseThrow().identifier())
-                            .toList()
-            );
+        if (levelStem == null) {
+            throw new IllegalStateException("Missing level stem: " + renderSettings.dimension);
         }
+
+        Set<Identifier> caveBiomes = PreviewDataModel.collectBiomeTags(biomeRegistry, List.of(C_CAVE, C_IS_CAVE, FORGE_CAVE, FORGE_IS_CAVE));
 
         previewData = previewMappingData.generateMapData(
                 biomeRegistry.keySet(),
                 caveBiomes,
                 strucutreRegistry.keySet(),
-                StreamSupport.stream(strucutreRegistry.getTagOrEmpty(DISPLAY_BY_DEFAULT).spliterator(), false)
-                        .map(x -> x.unwrapKey().orElseThrow().identifier())
-                        .collect(Collectors.toSet())
+                PreviewDataModel.collectStructureTags(strucutreRegistry, DISPLAY_BY_DEFAULT)
         );
 
         // Check whether we have a valid colormap stored
@@ -523,11 +482,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         workManager.postChangeWorldGenState();
 
         // Biomes
-        List<String> missing = Arrays.stream(previewData.biomeId2BiomeData())
-                .filter(x -> x.dataSource() == PreviewData.DataSource.MISSING)
-                .map(PreviewData.BiomeData::tag)
-                .map(Identifier::toString)
-                .toList();
+        List<String> missing = PreviewDataModel.missingBiomes(previewData);
         worldPreview.writeMissingColors(missing);
 
         allBiomes = biomeRegistry.entrySet().stream()
@@ -551,62 +506,19 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         biomesList.setSelected(null);
 
         // Structures
-        missing = Arrays.stream(previewData.structId2StructData())
-                .filter(x -> x.dataSource() == PreviewData.DataSource.MISSING)
-                .map(PreviewData.StructureData::tag)
-                .map(Identifier::toString)
-                .toList();
+        missing = PreviewDataModel.missingStructures(previewData);
         worldPreview.writeMissingStructures(missing);
 
         //  - Icons
         freeStructureIcons();
-        ResourceManager builtinResourceManager = minecraft.getResourceManager();
-        Map<Identifier, NativeImage> icons = new HashMap<>();
-        allStructureIcons = new NativeImage[previewData.structId2StructData().length];
-        for (int i = 0; i < previewData.structId2StructData().length; ++i) {
-            PreviewData.StructureData data = previewData.structId2StructData()[i];
-            allStructureIcons[i] = icons.computeIfAbsent(data.icon(), x -> {
-                if (x == null) {
-                    x = Identifier.parse("world_preview:textures/structure/unknown.png");
-                }
-                Optional<Resource> resource = builtinResourceManager.getResource(x);
-                if (resource.isEmpty()) {
-                    resource = workManager.sampleResourceManager().getResource(x);
-                }
-                if (resource.isEmpty()) {
-                    LOGGER.error("Failed to load structure icon: '{}'", x);
-                    resource = builtinResourceManager.getResource(Identifier.parse("world_preview:textures/structure/unknown.png"));
-                }
-                if (resource.isEmpty()) {
-                    LOGGER.error("FATAL ERROR LOADING: '{}' -- unable to load fallback!", x);
-                    return new NativeImage(16, 16, true);
-                }
-                try {
-                    try (InputStream in = resource.get().open()) {
-                        return NativeImage.read(in);
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    return new NativeImage(16, 16, true);
-                }
-            });
-        }
-
-        //  - Player and spawn icon
-        final Optional<Resource> playerResource;
-        final Optional<Resource> spawnResource;
-        playerResource = builtinResourceManager.getResource(Identifier.parse("world_preview:textures/etc/player.png"));
-        spawnResource = builtinResourceManager.getResource(Identifier.parse("world_preview:textures/etc/bed.png"));
-        try {
-            try (InputStream inPlayer = playerResource.orElseThrow().open(); InputStream inSpawn = spawnResource.orElseThrow().open()) {
-                playerIcon = NativeImage.read(inPlayer);
-                spawnIcon = NativeImage.read(inSpawn);
-            }
-        } catch (IOException e) {
-            playerIcon = new NativeImage(16, 16, true);
-            spawnIcon = new NativeImage(16, 16, true);
-            e.printStackTrace();
-        }
+        PreviewAssetLoader.Assets previewAssets = PreviewAssetLoader.loadAssets(
+                previewData,
+                minecraft.getResourceManager(),
+                workManager.sampleResourceManager()
+        );
+        allStructureIcons = previewAssets.structureIcons();
+        playerIcon = previewAssets.playerIcon();
+        spawnIcon = previewAssets.spawnIcon();
 
         //  - List entries
         Registry<Item> itemRegistry = layeredRegistryAccess.compositeAccess().lookupOrThrow(Registries.ITEM);
@@ -824,15 +736,19 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
 
     public void doLayout(ScreenRectangle screenRectangle) {
         if (screenRectangle == null) {
+            if (minecraft.screen == null) {
+                return;
+            }
             screenRectangle = minecraft.screen.getRectangle();
         }
         lastScreenRectangle = screenRectangle;
 
-        int leftWidth = Math.max(130, Math.min(180, screenRectangle.width() / 3));
-        int left = screenRectangle.left() + 3;
-        int previewLeft = left + leftWidth + 3;
-        int top = screenRectangle.top() + 2;
-        int bottom = screenRectangle.bottom() - 32;
+        PreviewLayout.Metrics layout = PreviewLayout.calculate(screenRectangle);
+        int leftWidth = layout.leftWidth();
+        int left = layout.left();
+        int previewLeft = layout.previewLeft();
+        int top = layout.top();
+        int bottom = layout.bottom();
 
         // Preview
         final int expand = toggleExpand.selected ? 22 + 2 : 0;
@@ -857,19 +773,26 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
 
         int btnStart = left + cycleWith + 2;
         settings.setPosition(left, top);
-        int i = 0;
-        toggleShowStructures.setPosition(btnStart + 22 * i++, top);
-        toggleCaves.setPosition(btnStart + 22 * i++, top);
-        resetToZeroZero.setPosition(btnStart + 22 * i++, top);
-        toggleExpand.setPosition(btnStart + 22 * i++, top);
+        int buttonX = btnStart;
+        toggleShowStructures.setPosition(buttonX, top);
+        buttonX += 22;
+        toggleCaves.setPosition(buttonX, top);
+        buttonX += 22;
+        resetToZeroZero.setPosition(buttonX, top);
+        buttonX += 22;
+        toggleExpand.setPosition(buttonX, top);
 
         // TOP - hidden buttons
-        i = 0;
-        toggleBiomes.setPosition(previewLeft + 22 * i++, top);
-        toggleIntersections.setPosition(previewLeft + 22 * i++, top);
-        toggleHeightmap.setPosition(previewLeft + 22 * i++, top);
-        toggleNoise.setPosition(previewLeft + 22 * i++, top);
-        noiseCycleButton.setPosition(previewLeft + 22 * i++, top);
+        buttonX = previewLeft;
+        toggleBiomes.setPosition(buttonX, top);
+        buttonX += 22;
+        toggleIntersections.setPosition(buttonX, top);
+        buttonX += 22;
+        toggleHeightmap.setPosition(buttonX, top);
+        buttonX += 22;
+        toggleNoise.setPosition(buttonX, top);
+        buttonX += 22;
+        noiseCycleButton.setPosition(buttonX, top);
 
         //  - new row
         top += LINE_HEIGHT + LINE_VSPACE;
@@ -910,6 +833,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
 
     @Override
     public void close() {
+        reloadController.close();
         workManager.cancel();
         previewDisplay.close();
         freeStructureIcons();
@@ -984,6 +908,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         return previewData;
     }
 
+    @SuppressWarnings("unused")
     public WorkManager workManager() {
         return workManager;
     }
@@ -1045,6 +970,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
     }
 
     @Override
+    @SuppressWarnings("resource")
     public @NotNull PlayerData getPlayerData(UUID playerId) {
         if (workManager == null || workManager.sampleUtils() == null) {
             return new PlayerData(null, null);
@@ -1065,18 +991,22 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         );
     }
 
+    @SuppressWarnings("unused")
     public ToggleButton toggleCaves() {
         return toggleCaves;
     }
 
+    @SuppressWarnings("unused")
     public ToggleButton toggleShowStructures() {
         return toggleShowStructures;
     }
 
+    @SuppressWarnings("unused")
     public ToggleButton toggleHeightmap() {
         return toggleHeightmap;
     }
 
+    @SuppressWarnings("unused")
     public ToggleButton toggleIntersections() {
         return toggleIntersections;
     }

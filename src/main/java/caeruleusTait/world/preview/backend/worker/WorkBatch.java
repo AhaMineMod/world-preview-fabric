@@ -1,7 +1,5 @@
 package caeruleusTait.world.preview.backend.worker;
 
-import caeruleusTait.world.preview.WorldPreview;
-import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.storage.PreviewSection;
 import com.mojang.datafixers.util.Pair;
 import net.minecraft.core.QuartPos;
@@ -11,21 +9,29 @@ import net.minecraft.world.level.levelgen.structure.StructureStart;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
+
+import static caeruleusTait.world.preview.WorldPreview.LOGGER;
 
 public class WorkBatch {
     public final List<WorkUnit> workUnits;
     private final Object completedSynchro;
-    private final PreviewData previewData;
-    private boolean isCanceled = false;
+    private final BooleanSupplier shouldApplyResults;
+    private volatile boolean isCanceled = false;
+    private volatile boolean isDone = false;
 
-    public WorkBatch(List<WorkUnit> workUnits, Object completedSynchro, PreviewData previewData) {
+    public WorkBatch(List<WorkUnit> workUnits, Object completedSynchro, BooleanSupplier shouldApplyResults) {
         this.workUnits = workUnits;
         this.completedSynchro = completedSynchro;
-        this.previewData = previewData;
+        this.shouldApplyResults = shouldApplyResults;
     }
 
     public boolean isCanceled() {
         return isCanceled;
+    }
+
+    public boolean isDone() {
+        return isDone;
     }
 
     public void cancel() {
@@ -47,18 +53,29 @@ public class WorkBatch {
                 }
             }
 
+            if (isCanceled() || !shouldApplyResults.getAsBoolean()) {
+                return;
+            }
+
             // Mark as completed early to avoid duplicate work
             synchronized (completedSynchro) {
-                final var workManager = WorldPreview.get().workManager();
+                if (isCanceled() || !shouldApplyResults.getAsBoolean()) {
+                    return;
+                }
                 for (WorkUnit unit : workUnits) {
                     unit.markCompleted();
-                    workManager.onWorkUnitCompleted(unit.flags());
+                    unit.context.onWorkUnitCompleted(unit.flags());
                 }
             }
 
+            if (isCanceled() || !shouldApplyResults.getAsBoolean()) {
+                return;
+            }
             applyChunkResult(res);
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.error("Unhandled error while processing preview work batch", e);
+        } finally {
+            isDone = true;
         }
     }
 
@@ -77,17 +94,18 @@ public class WorkBatch {
                 PreviewSection.AccessData offsetData = section.calcQuartOffsetData(qStartX, qStartZ, qStartX + 4, qStartZ + 4);
 
                 // Assume that one chunk always fits
-                for (var x : workResult.results()) {
+                WorkResult.BlockResults results = workResult.results();
+                for (int i = 0; i < results.size(); ++i) {
                     section.set(
-                            offsetData.minX() + x.quartX() - qStartX,
-                            offsetData.minZ() + x.quartZ() - qStartZ,
-                            x.value()
+                            offsetData.minX() + results.quartX(i) - qStartX,
+                            offsetData.minZ() + results.quartZ(i) - qStartZ,
+                            results.value(i)
                     );
                 }
 
                 for (Pair<Identifier, StructureStart> x : workResult.structures()) {
                     StructureStart structureStart = x.getSecond();
-                    short id = previewData.struct2Id().getShort(x.getFirst().toString());
+                    short id = workResult.workUnit().previewData.struct2Id().getShort(x.getFirst().toString());
                     section.addStructure(new PreviewSection.PreviewStruct(
                             structureStart.getBoundingBox().getCenter(),
                             id,
@@ -96,7 +114,7 @@ public class WorkBatch {
                 }
             }
         } catch (Throwable e) {
-            e.printStackTrace();
+            LOGGER.error("Unhandled error while applying preview work result", e);
         }
     }
 }

@@ -1,6 +1,5 @@
 package caeruleusTait.world.preview.backend.worker;
 
-import caeruleusTait.world.preview.backend.color.PreviewData;
 import caeruleusTait.world.preview.backend.storage.PreviewStorage;
 import com.mojang.datafixers.util.Pair;
 import net.minecraft.resources.Identifier;
@@ -10,8 +9,8 @@ import net.minecraft.world.level.levelgen.structure.StructureStart;
 import java.util.List;
 
 public class StructStartWorkUnit extends WorkUnit {
-    public StructStartWorkUnit(SampleUtils sampleUtils, ChunkPos pos, PreviewData previewData) {
-        super(sampleUtils, pos, previewData, 0);
+    public StructStartWorkUnit(PreviewWorkContext context, ChunkPos pos) {
+        super(context, pos, 0);
     }
 
     @Override
@@ -22,7 +21,7 @@ public class StructStartWorkUnit extends WorkUnit {
                         this,
                         0,
                         primarySection,
-                        List.of(),
+                        new WorkResult.BlockResults(0),
                         res
                 )
         );

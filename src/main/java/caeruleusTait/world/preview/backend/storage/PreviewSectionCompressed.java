@@ -9,6 +9,11 @@ import java.util.List;
 public abstract class PreviewSectionCompressed extends PreviewSection {
     @Serial
     private static final long serialVersionUID = 6458820535476205432L;
+    private static final int SINGLE_VALUE_MAP_SIZE = 0;
+    private static final int DIRECT_DATA_MAP_SIZE = 1;
+    private static final int TWO_BIT_MAP_SIZE = 4;
+    private static final int FOUR_BIT_MAP_SIZE = 16;
+    private static final int EIGHT_BIT_MAP_SIZE = 256;
 
     private final int size;
 
@@ -92,27 +97,27 @@ public abstract class PreviewSectionCompressed extends PreviewSection {
     private short getReal(int idx) {
         return switch (mapData.length) {
             // The entire section only contains one single value
-            case 0 -> data[0];
+            case SINGLE_VALUE_MAP_SIZE -> data[0];
 
             // There is no cache (magic array length 1)
-            case 1 -> data[idx];
+            case DIRECT_DATA_MAP_SIZE -> data[idx];
 
             // First compression level (oct - 4 unique values | 2 bit per value)
-            case 4 -> {
+            case TWO_BIT_MAP_SIZE -> {
                 final short word = data[idx >> 3];
                 final int map_idx = (word >> ((idx & 0b111) << 1)) & 0b11;
                 yield mapData[map_idx];
             }
 
             // Second compression level (quart - 16 unique values | 4 bit per value)
-            case 16 -> {
+            case FOUR_BIT_MAP_SIZE -> {
                 final short word = data[idx >> 2];
                 final int map_idx = (word >> ((idx & 0b11) << 2)) & 0b1111;
                 yield mapData[map_idx];
             }
 
             // Third compression level (quart - 256 unique values | 8 bit per value)
-            case 256 -> {
+            case EIGHT_BIT_MAP_SIZE -> {
                 final short word = data[idx >> 1];
                 final int map_idx = (word >> ((idx & 0b1) << 3)) & 0b11111111;
                 yield mapData[map_idx];
@@ -126,13 +131,13 @@ public abstract class PreviewSectionCompressed extends PreviewSection {
         final int idx = xzToIdx(x, z);
         switch (mapData.length) {
             // The entire section only contains one single value
-            case 0 -> data[0] = value;
+            case SINGLE_VALUE_MAP_SIZE -> data[0] = value;
 
             // There is no cache (magic array length 1)
-            case 1 -> data[idx] = value;
+            case DIRECT_DATA_MAP_SIZE -> data[idx] = value;
 
             // First compression level (oct - 4 unique values | 2 bit per value)
-            case 4 -> {
+            case TWO_BIT_MAP_SIZE -> {
                 final int didx = idx >> 3;
                 final int shift = (idx & 0b111) << 1;
                 final int mask = ~(0b11 << shift);
@@ -140,7 +145,7 @@ public abstract class PreviewSectionCompressed extends PreviewSection {
             }
 
             // Second compression level (quart - 16 unique values | 4 bit per value)
-            case 16 -> {
+            case FOUR_BIT_MAP_SIZE -> {
                 final int didx = idx >> 2;
                 final int shift = (idx & 0b11) << 2;
                 final int mask = ~(0b1111 << shift);
@@ -148,7 +153,7 @@ public abstract class PreviewSectionCompressed extends PreviewSection {
             }
 
             // Third compression level (quart - 256 unique values | 8 bit per value)
-            case 256 -> {
+            case EIGHT_BIT_MAP_SIZE -> {
                 final int didx = idx >> 1;
                 final int shift = (idx & 0b1) << 3;
                 final int mask = ~(0b11111111 << shift);
@@ -184,57 +189,57 @@ public abstract class PreviewSectionCompressed extends PreviewSection {
         // We need to grow the array (expensive)
         return switch (mapData.length) {
             // Grow first level compression to second level compression
-            case 4 -> {
+            case TWO_BIT_MAP_SIZE -> {
                 // Grow mapData
-                short[] newMapData = Arrays.copyOf(mapData, 16);
-                newMapData[4] = value;
-                Arrays.fill(newMapData, 5, 16, Short.MIN_VALUE);
+                short[] newMapData = Arrays.copyOf(mapData, FOUR_BIT_MAP_SIZE);
+                newMapData[TWO_BIT_MAP_SIZE] = value;
+                Arrays.fill(newMapData, TWO_BIT_MAP_SIZE + 1, FOUR_BIT_MAP_SIZE, Short.MIN_VALUE);
 
                 // Grow data
                 short[] newData = new short[data.length * 2];
                 for (int i = 0; i < data.length; ++i) {
                     final short s = data[i];
-                    newData[i * 2 + 0] = (short) ((((s >> 0) & 0b11) << 0) | (((s >>  2) & 0b11) << 4) | (((s >>  4) & 0b11) << 8) | (((s >>  6) & 0b11) << 12));
-                    newData[i * 2 + 1] = (short) ((((s >> 8) & 0b11) << 0) | (((s >> 10) & 0b11) << 4) | (((s >> 12) & 0b11) << 8) | (((s >> 14) & 0b11) << 12));
+                    newData[i * 2] = (short) ((s & 0b11) | (((s >>  2) & 0b11) << 4) | (((s >>  4) & 0b11) << 8) | (((s >>  6) & 0b11) << 12));
+                    newData[i * 2 + 1] = (short) (((s >> 8) & 0b11) | (((s >> 10) & 0b11) << 4) | (((s >> 12) & 0b11) << 8) | (((s >> 14) & 0b11) << 12));
                 }
 
                 // Make the change as "atomic" as possible to reduce the risk of `IndexOutOfBoundsException`s
                 mapData = newMapData;
                 data = newData;
-                yield 4;
+                yield TWO_BIT_MAP_SIZE;
             }
 
             // Grow second level compression to third level compression
-            case 16 -> {
+            case FOUR_BIT_MAP_SIZE -> {
                 // Grow mapData
-                short[] newMapData = Arrays.copyOf(mapData, 256);
-                newMapData[16] = value;
-                Arrays.fill(newMapData, 17, 256, Short.MIN_VALUE);
+                short[] newMapData = Arrays.copyOf(mapData, EIGHT_BIT_MAP_SIZE);
+                newMapData[FOUR_BIT_MAP_SIZE] = value;
+                Arrays.fill(newMapData, FOUR_BIT_MAP_SIZE + 1, EIGHT_BIT_MAP_SIZE, Short.MIN_VALUE);
 
                 // Grow data
                 short[] newData = new short[data.length * 2];
                 for (int i = 0; i < data.length; ++i) {
                     final short s = data[i];
-                    newData[i * 2 + 0] = (short) ((((s >> 0) & 0b1111) << 0) | (((s >>  4) & 0b1111) << 8));
-                    newData[i * 2 + 1] = (short) ((((s >> 8) & 0b1111) << 0) | (((s >> 12) & 0b1111) << 8));
+                    newData[i * 2] = (short) ((s & 0b1111) | (((s >>  4) & 0b1111) << 8));
+                    newData[i * 2 + 1] = (short) (((s >> 8) & 0b1111) | (((s >> 12) & 0b1111) << 8));
                 }
                 // Make the change as "atomic" as possible to reduce the risk of `IndexOutOfBoundsException`s
                 mapData = newMapData;
                 data = newData;
-                yield 16;
+                yield FOUR_BIT_MAP_SIZE;
             }
 
             // Fully expand third level to no compression
-            case 256 -> {
+            case EIGHT_BIT_MAP_SIZE -> {
                 // Grow data
                 short[] newData = new short[data.length * 2];
                 for (int i = 0; i < data.length; ++i) {
                     final short s = data[i];
-                    newData[i * 2 + 0] = mapData[((s >> 0) & 0b11111111)];
+                    newData[i * 2] = mapData[(s & 0b11111111)];
                     newData[i * 2 + 1] = mapData[((s >> 8) & 0b11111111)];
                 }
 
-                mapData = new short[1]; // There is no cache (magic array length 1)
+                mapData = new short[DIRECT_DATA_MAP_SIZE]; // There is no cache (magic array length 1)
                 data = newData;
 
                 // No more compression --> no map --> no index, just the raw value
@@ -246,22 +251,22 @@ public abstract class PreviewSectionCompressed extends PreviewSection {
 
 
     public synchronized void set(int x, int z, short biome) {
-        if (mapData.length == 0) {
+        if (mapData.length == SINGLE_VALUE_MAP_SIZE) {
             // Handle single value for entire section
 
-            if (data[0] == biome) {
-                // Nothing to do
-            } else if (data[0] == Short.MIN_VALUE) {
-                data[0] = biome;
-            } else {
-                // new value --> expand to first level compression
-                short[] newData = new short[(size * size) >> 3];
-                Arrays.fill(newData, (short) 0);
-                mapData = new short[]{data[0], biome, Short.MIN_VALUE, Short.MIN_VALUE};
-                data = newData;
-                internalSetData(x, z, (short) 1);
+            if (data[0] != biome) {
+                if (data[0] == Short.MIN_VALUE) {
+                    data[0] = biome;
+                } else {
+                    // new value --> expand to first level compression
+                    short[] newData = new short[(size * size) >> 3];
+                    Arrays.fill(newData, (short) 0);
+                    mapData = new short[]{data[0], biome, Short.MIN_VALUE, Short.MIN_VALUE};
+                    data = newData;
+                    internalSetData(x, z, (short) 1);
+                }
             }
-        } else if(mapData.length == 1) {
+        } else if (mapData.length == DIRECT_DATA_MAP_SIZE) {
             // Handle no compression
 
             data[xzToIdx(x, z)] = biome;
@@ -295,15 +300,4 @@ public abstract class PreviewSectionCompressed extends PreviewSection {
         throw new NotImplementedException();
     }
 
-    public synchronized short mapSize() {
-        short s;
-
-        for (s = 0; s < mapData.length; s++) {
-            if (mapData[s] == Short.MIN_VALUE) {
-                return s;
-            }
-        }
-
-        return s;
-    }
 }

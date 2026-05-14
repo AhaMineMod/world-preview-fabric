@@ -94,8 +94,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static caeruleusTait.world.preview.WorldPreview.LOGGER;
@@ -122,19 +123,22 @@ public class SampleUtils implements AutoCloseable {
     private final MinecraftServer minecraftServer;
     private final ServerLevel serverLevel;
     private final WorldPreviewConfig cfg;
+    private final List<ExecutorService> ownedExecutors;
 
     /**
      * Create SampleUtils with a <b>real</b> Minecraft server
      */
-    public SampleUtils(
+    @SuppressWarnings("DataFlowIssue")
+    SampleUtils(
             @NotNull MinecraftServer server,
             BiomeSource biomeSource,
             ChunkGenerator chunkGenerator,
             WorldOptions worldOptions,
             LevelStem levelStem,
             LevelHeightAccessor levelHeightAccessor
-    ) throws IOException {
+    ) {
         this.cfg = WorldPreview.get().cfg();
+        this.ownedExecutors = List.of();
         this.tempDir = null;
         this.minecraftServer = server;
         this.dataFixer = minecraftServer.getFixerUpper();
@@ -199,7 +203,8 @@ public class SampleUtils implements AutoCloseable {
     /**
      * Create SampleUtils <b>and</b> a fake Minecraft server
      */
-    public SampleUtils(
+    @SuppressWarnings({"DataFlowIssue", "deprecation"})
+    SampleUtils(
             BiomeSource biomeSource,
             ChunkGenerator chunkGenerator,
             LayeredRegistryAccess<RegistryLayer> layeredRegistryAccess,
@@ -211,6 +216,8 @@ public class SampleUtils implements AutoCloseable {
             @Nullable Path tempDataPackDir
     ) throws IOException, RuntimeException {
         this.cfg = WorldPreview.get().cfg();
+        final List<ExecutorService> ownedExecutors = new ArrayList<>();
+        this.ownedExecutors = ownedExecutors;
         try {
             tempDir = Files.createTempDirectory("world_preview");
         } catch (IOException e) {
@@ -235,7 +242,7 @@ public class SampleUtils implements AutoCloseable {
                     try {
                         Util.copyBetweenDirs(tempDataPackDir, dataPackDir, x);
                     } catch (IOException e) {
-                        e.printStackTrace();
+                        LOGGER.warn("Unable to copy preview datapack resource {}", x, e);
                     }
                 });
             }
@@ -271,11 +278,12 @@ public class SampleUtils implements AutoCloseable {
 
         // Some mods listen on the <init> of MinecraftServer
         final PermissionSet functionCompilationLevel = PermissionSet.NO_PERMISSIONS;
-        final Executor executor = Executors.newSingleThreadExecutor();
+        final ExecutorService reloadExecutor = newOwnedExecutor("world-preview-resource-loader");
+        ownedExecutors.add(reloadExecutor);
         final LevelSettings levelSettings = new LevelSettings("temp", GameType.CREATIVE, false, Difficulty.NORMAL, true, new GameRules(worldDataConfiguration.enabledFeatures()), worldDataConfiguration);
         List<Registry.PendingTags<?>> list = TagLoader.loadTagsForExistingRegistries(resourceManager, layeredRegistryAccess.getLayer(RegistryLayer.STATIC));
         final PrimaryLevelData primaryLevelData = new PrimaryLevelData(levelSettings, worldOptions, PrimaryLevelData.SpecialWorldProperty.NONE, Lifecycle.stable());
-        final var future = ReloadableServerResources.loadResources(resourceManager, layeredRegistryAccess, list, worldDataConfiguration.enabledFeatures(), Commands.CommandSelection.DEDICATED, functionCompilationLevel, executor, executor);
+        final var future = ReloadableServerResources.loadResources(resourceManager, layeredRegistryAccess, list, worldDataConfiguration.enabledFeatures(), Commands.CommandSelection.DEDICATED, functionCompilationLevel, reloadExecutor, reloadExecutor);
         final ReloadableServerResources reloadableServerResources;
         try {
             reloadableServerResources = future.get();
@@ -290,22 +298,22 @@ public class SampleUtils implements AutoCloseable {
 
         final LevelLoadListener levelLoadListener = new LevelLoadListener() {
             @Override
-            public void start(Stage stage, int totalChunks) {
+            public void start(@NotNull Stage stage, int totalChunks) {
 
             }
 
             @Override
-            public void update(Stage stage, int readyChunks, int totalChunks) {
+            public void update(@NotNull Stage stage, int readyChunks, int totalChunks) {
 
             }
 
             @Override
-            public void finish(Stage stage) {
+            public void finish(@NotNull Stage stage) {
 
             }
 
             @Override
-            public void updateFocus(ResourceKey<Level> dimension, ChunkPos chunkPos) {
+            public void updateFocus(@NotNull ResourceKey<Level> dimension, @NotNull ChunkPos chunkPos) {
 
             }
         };
@@ -329,9 +337,11 @@ public class SampleUtils implements AutoCloseable {
         // ((DummyMinecraftServer) minecraftServer).createLevels();
 
         // Now "create" a world, to trigger mixins hooking the ServerLevel constructor
+        final ExecutorService initialLevelExecutor = newOwnedExecutor("world-preview-initial-level");
+        ownedExecutors.add(initialLevelExecutor);
         new ServerLevel(
                 minecraftServer,
-                Executors.newSingleThreadExecutor(),
+                initialLevelExecutor,
                 levelStorageAccess,
                 new DerivedLevelData(
                         worldStem.worldData(),
@@ -388,9 +398,11 @@ public class SampleUtils implements AutoCloseable {
         chunkGeneratorStructureState.ensureStructuresGenerated();
 
         // Create fake , to trigger mixins for some mods...
+        final ExecutorService levelExecutor = newOwnedExecutor("world-preview-level");
+        ownedExecutors.add(levelExecutor);
         serverLevel = new ServerLevel(
                 minecraftServer,
-                Executors.newSingleThreadExecutor(),
+                levelExecutor,
                 levelStorageAccess,
                 new DummyServerLevelData(),
                 dimension,
@@ -410,56 +422,15 @@ public class SampleUtils implements AutoCloseable {
         return minecraftServer.getPlayerList().getPlayer(playerId);
     }
 
-    public record BiomeResult(ResourceKey<Biome> biome, short[] noiseResult) {
-    }
-
     private static short doubleToShort(double val, double factor) {
-        return (short) Math.min(Short.MAX_VALUE, Math.max(Short.MIN_VALUE, (long) (val * factor * (double) Short.MAX_VALUE)));
+        return (short) Math.clamp((long) (val * factor * (double) Short.MAX_VALUE), Short.MIN_VALUE, Short.MAX_VALUE);
     }
 
     public boolean hasRawNoiseInfo() {
         return cfg.storeNoiseSamples && biomeSource instanceof MultiNoiseBiomeSource;
     }
 
-    public BiomeResult doSample(BlockPos pos) {
-        final Climate.Sampler sampler = randomState.sampler();
-        if (hasRawNoiseInfo()) {
-            final var singlePointContext = new DensityFunction.SinglePointContext(pos.getX(), pos.getY(), pos.getZ());
-            final double temperature = sampler.temperature().compute(singlePointContext);
-            final double humidity = sampler.humidity().compute(singlePointContext);
-            final double continentalness = sampler.continentalness().compute(singlePointContext);
-            final double erosion = sampler.erosion().compute(singlePointContext);
-            final double depth = sampler.depth().compute(singlePointContext);
-            final double weirdness = sampler.weirdness().compute(singlePointContext);
-
-            final short[] noiseData = new short[]{
-                    doubleToShort(temperature, 1),
-                    doubleToShort(humidity, 1),
-                    doubleToShort(continentalness, 0.5),
-                    doubleToShort(erosion, 1),
-                    doubleToShort(depth, 0.5),
-                    doubleToShort(weirdness, 0.75),
-            };
-
-            final var targetPoint = Climate.target((float) temperature, (float) humidity, (float) continentalness, (float) erosion, (float) depth, (float) weirdness);
-            final MultiNoiseBiomeSource noiseBiomeSource = (MultiNoiseBiomeSource) biomeSource;
-            final Holder<Biome> biome = noiseBiomeSource.getNoiseBiome(targetPoint);
-            return new BiomeResult(biome.unwrapKey().orElseThrow(), noiseData);
-        } else {
-            return new BiomeResult(
-                    biomeSource.getNoiseBiome(
-                            QuartPos.fromBlock(pos.getX()),
-                            QuartPos.fromBlock(pos.getY()),
-                            QuartPos.fromBlock(pos.getZ()),
-                            randomState.sampler()
-                    ).unwrapKey().orElseThrow(),
-                    null
-            );
-        }
-    }
-
-    /*
-    public ResourceKey<Biome> doSample(BlockPos pos) {
+    public ResourceKey<Biome> sampleBiome(BlockPos pos) {
         return biomeSource.getNoiseBiome(
                 QuartPos.fromBlock(pos.getX()),
                 QuartPos.fromBlock(pos.getY()),
@@ -467,10 +438,35 @@ public class SampleUtils implements AutoCloseable {
                 randomState.sampler()
         ).unwrapKey().orElseThrow();
     }
-     */
+
+    public ResourceKey<Biome> sampleBiomeAndNoise(BlockPos pos, short[] noiseData) {
+        final Climate.Sampler sampler = randomState.sampler();
+        final var singlePointContext = new DensityFunction.SinglePointContext(pos.getX(), pos.getY(), pos.getZ());
+        final double temperature = sampler.temperature().compute(singlePointContext);
+        final double humidity = sampler.humidity().compute(singlePointContext);
+        final double continentalness = sampler.continentalness().compute(singlePointContext);
+        final double erosion = sampler.erosion().compute(singlePointContext);
+        final double depth = sampler.depth().compute(singlePointContext);
+        final double weirdness = sampler.weirdness().compute(singlePointContext);
+
+        noiseData[0] = doubleToShort(temperature, 1);
+        noiseData[1] = doubleToShort(humidity, 1);
+        noiseData[2] = doubleToShort(continentalness, 0.5);
+        noiseData[3] = doubleToShort(erosion, 1);
+        noiseData[4] = doubleToShort(depth, 0.5);
+        noiseData[5] = doubleToShort(weirdness, 0.75);
+
+        final var targetPoint = Climate.target((float) temperature, (float) humidity, (float) continentalness, (float) erosion, (float) depth, (float) weirdness);
+        final MultiNoiseBiomeSource noiseBiomeSource = (MultiNoiseBiomeSource) biomeSource;
+        final Holder<Biome> biome = noiseBiomeSource.getNoiseBiome(targetPoint);
+        return biome.unwrapKey().orElseThrow();
+    }
 
     public List<Pair<Identifier, StructureStart>> doStructures(ChunkPos chunkPos) {
         ProtoChunk protoChunk = (ProtoChunk) previewLevel.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
+        if (protoChunk == null) {
+            return List.of();
+        }
         chunkGenerator.createStructures(registryAccess, chunkGeneratorStructureState, structureManager, protoChunk, structureTemplateManager, dimension);
         Map<Structure, StructureStart> raw = protoChunk.getAllStarts();
         List<Pair<Identifier, StructureStart>> res = new ArrayList<>(raw.size());
@@ -519,12 +515,44 @@ public class SampleUtils implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        // FileUtils.deleteDirectory(tempDir.toFile());
-        if (serverLevel != null) {
-            serverLevel.close();
+        try {
+            if (serverLevel != null) {
+                serverLevel.close();
+            }
+            if (tempDir != null) {
+                resourceManager.close();
+                deleteDirectoryLegacyIO(tempDir.toFile());
+            }
+        } finally {
+            shutdownOwnedExecutors();
         }
-        if (tempDir != null) {
-            deleteDirectoryLegacyIO(tempDir.toFile());
+    }
+
+    private static ExecutorService newOwnedExecutor(String name) {
+        return Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, name);
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    private void shutdownOwnedExecutors() {
+        for (ExecutorService executor : ownedExecutors) {
+            executor.shutdownNow();
+        }
+
+        boolean interrupted = false;
+        for (ExecutorService executor : ownedExecutors) {
+            try {
+                if (!executor.awaitTermination(1L, TimeUnit.SECONDS)) {
+                    LOGGER.warn("Preview executor did not stop cleanly: {}", executor);
+                }
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -545,10 +573,6 @@ public class SampleUtils implements AutoCloseable {
 
     public CloseableResourceManager resourceManager() {
         return resourceManager;
-    }
-
-    public RegistryAccess registryAccess() {
-        return registryAccess;
     }
 
     public ResourceKey<Level> dimension() {
