@@ -1,10 +1,12 @@
 package caeruleusTait.world.preview.client.gui;
 
 import caeruleusTait.world.preview.backend.storage.PreviewStorageCacheManager;
+import caeruleusTait.world.preview.client.WorldPreviewComponents;
 import net.minecraft.client.gui.screens.worldselection.WorldCreationContext;
 import net.minecraft.core.LayeredRegistryAccess;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.RegistryLayer;
 import net.minecraft.world.level.WorldDataConfiguration;
@@ -25,6 +27,21 @@ public interface PreviewContainerDataProvider extends PreviewStorageCacheManager
     void updateSeed(String newSeed);
 
     boolean seedIsEditable();
+
+    default boolean randomizeSeedWhenEmpty() {
+        return seedIsEditable();
+    }
+
+    default boolean seedRequestAvailable() {
+        return false;
+    }
+
+    default void requestSeed() {
+    }
+
+    default Component seedTooltip() {
+        return WorldPreviewComponents.SEED_LABEL;
+    }
 
     @Nullable Path tempDataPackDir();
 

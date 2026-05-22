@@ -145,7 +145,7 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         seedEdit.setHint(SEED_FIELD);
         seedEdit.setValue(dataProvider.seed());
         seedEdit.setResponder(this::setSeed);
-        seedEdit.setTooltip(Tooltip.create(SEED_LABEL));
+        seedEdit.setTooltip(Tooltip.create(dataProvider.seedTooltip()));
         seedEdit.active = dataProvider.seedIsEditable();
         toRender.add(seedEdit);
 
@@ -153,10 +153,10 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
                 0, 0, 20, 20, /* x, y, width, height */
                 0, 20, 20, /* xTexStart, yTexStart, yDiffTex */
                 BUTTONS_TEXTURE, BUTTONS_TEX_WIDTH, BUTTONS_TEX_HEIGHT, /* Identifier, textureWidth, textureHeight*/
-                this::randomizeSeed
+                this::onSeedButton
         );
-        randomSeedButton.setTooltip(Tooltip.create(BTN_RANDOM));
-        randomSeedButton.active = dataProvider.seedIsEditable();
+        randomSeedButton.setTooltip(Tooltip.create(dataProvider.seedRequestAvailable() ? BTN_REQUEST_SEED : BTN_RANDOM));
+        randomSeedButton.active = dataProvider.seedIsEditable() || dataProvider.seedRequestAvailable();
         toRender.add(randomSeedButton);
 
         saveSeed = new OldStyleImageButton(
@@ -622,6 +622,14 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
         // setSeed(String.valueOf(WorldOptions.randomSeed()));
     }
 
+    private void onSeedButton(Button btn) {
+        if (dataProvider.seedRequestAvailable()) {
+            dataProvider.requestSeed();
+            return;
+        }
+        randomizeSeed(btn);
+    }
+
     private void saveCurrentSeed(Button btn) {
         cfg.savedSeeds.add(dataProvider.seed());
         saveSeed.active = false;
@@ -644,6 +652,12 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
             dataProvider.updateSeed(seed);
         } finally {
             inhibitUpdates = initialInhibitUpdates;
+        }
+        if (seed.isEmpty() && !dataProvider.randomizeSeedWhenEmpty()) {
+            workManager.cancel();
+            saveSeed.active = false;
+            updateSeedListWidget();
+            return;
         }
         updateSettings();
     }
@@ -719,6 +733,9 @@ public class PreviewContainer implements AutoCloseable, PreviewDisplayDataProvid
     public synchronized void start() {
         LOGGER.info("Start generating biome data...");
         if (dataProvider.seed().isEmpty()) {
+            if (!dataProvider.randomizeSeedWhenEmpty()) {
+                return;
+            }
             randomizeSeed(null);
         }
         inhibitUpdates = false;

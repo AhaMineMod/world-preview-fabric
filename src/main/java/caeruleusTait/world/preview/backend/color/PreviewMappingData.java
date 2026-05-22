@@ -79,6 +79,22 @@ public class PreviewMappingData {
         colorMaps.add(colorMap);
     }
 
+    public boolean hasBiomeMappings() {
+        return !colorMappingData.isEmpty();
+    }
+
+    public boolean hasStructureMappings() {
+        return !structMappingData.isEmpty();
+    }
+
+    public boolean hasHeightmapPresets() {
+        return !heightmapPresets.isEmpty();
+    }
+
+    public boolean hasColorMaps() {
+        return !colorMaps.isEmpty();
+    }
+
     public PreviewData generateMapData(
             Set<Identifier> biomesSet,
             Set<Identifier> caveBiomesSet,

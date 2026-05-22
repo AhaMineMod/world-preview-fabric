@@ -3,6 +3,7 @@ package caeruleusTait.world.preview.mixin.client;
 import caeruleusTait.world.preview.WorldPreview;
 import caeruleusTait.world.preview.client.WorldPreviewComponents;
 import caeruleusTait.world.preview.client.gui.screens.InGamePreviewScreen;
+import caeruleusTait.world.preview.client.gui.screens.MultiplayerPreviewScreen;
 import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
@@ -35,11 +36,6 @@ public abstract class PauseScreenMixin {
     private void addWorldPreviewButton(CallbackInfo ci, @Local GridLayout.RowHelper rowHelper) {
         Minecraft minecraft = Minecraft.getInstance();
 
-        // Don't show in Multiplayer
-        if (minecraft.getSingleplayerServer() == null) {
-            return;
-        }
-
         // Only show the menu button if configured to do so
         if(WorldPreview.get().cfg().showInPauseMenu == true) {
             rowHelper.addChild(
@@ -55,6 +51,10 @@ public abstract class PauseScreenMixin {
     @Unique
     private void onPressWorldPreview(Button btn) {
         Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.getSingleplayerServer() == null) {
+            minecraft.setScreen(new MultiplayerPreviewScreen());
+            return;
+        }
         minecraft.setScreen(new InGamePreviewScreen());
     }
 }

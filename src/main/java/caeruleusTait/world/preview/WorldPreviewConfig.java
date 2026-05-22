@@ -1,11 +1,14 @@
 package caeruleusTait.world.preview;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class WorldPreviewConfig {
 
     public List<String> savedSeeds = new ArrayList<>();
+    public Map<String, String> multiplayerSeeds = new HashMap<>();
 
     public boolean showInPauseMenu = true;
     public boolean showPlayer = true;

@@ -1,6 +1,7 @@
 package caeruleusTait.world.preview;
 
 import caeruleusTait.world.preview.backend.WorkManager;
+import caeruleusTait.world.preview.backend.color.DefaultPreviewMappingLoader;
 import caeruleusTait.world.preview.backend.color.PreviewMappingData;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -69,6 +70,7 @@ public class WorldPreview implements ModInitializer {
 
         workManager = new WorkManager(renderSettings, cfg);
         previewMappingData = new PreviewMappingData();
+        ensureBasePreviewMappingsLoaded();
     }
 
     public void loaderSpecificSetup(MinecraftServer minecraftServer) {
@@ -85,6 +87,10 @@ public class WorldPreview implements ModInitializer {
 
     public PreviewMappingData biomeColorMap() {
         return previewMappingData;
+    }
+
+    public void ensureBasePreviewMappingsLoaded() {
+        DefaultPreviewMappingLoader.loadMissingDefaults(previewMappingData, userColorConfigFile);
     }
 
     public RenderSettings renderSettings() {

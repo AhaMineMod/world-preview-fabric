@@ -10,7 +10,9 @@ public class WorldPreviewComponents {
     public static final Component LOADING_PREVIEW = Component.translatable("world_preview.preview.loading");
     public static final Component SEED_FIELD = Component.translatable("world_preview.preview.seed-field");
     public static final Component SEED_LABEL = Component.translatable("world_preview.preview.seed-label");
+    public static final Component SEED_LABEL_MULTIPLAYER = Component.translatable("world_preview.preview.seed-label.multiplayer");
     public static final Component BTN_RANDOM = Component.translatable("world_preview.preview.btn-random");
+    public static final Component BTN_REQUEST_SEED = Component.translatable("world_preview.preview.btn-request-seed");
     public static final Component BTN_SAVE_SEED = Component.translatable("world_preview.preview.btn-save-seed");
     public static final Component BTN_SETTINGS = Component.translatable("world_preview.preview.btn-settings");
     public static final Component BTN_CAVES = Component.translatable("world_preview.preview.btn-caves");
@@ -33,6 +35,8 @@ public class WorldPreviewComponents {
     // Error message on setup
     public static final Component MSG_ERROR_SETUP_FAILED = Component.translatable("world_preview.preview.error.setup-failed");
     public static final Component MSG_PREVIEW_SETUP_LOADING = Component.translatable("world_preview.preview.msg.loading");
+    public static final Component MSG_SEED_REQUEST_SENT = Component.translatable("world_preview.preview.seed-request.sent");
+    public static final Component MSG_SEED_REQUEST_FAILED = Component.translatable("world_preview.preview.seed-request.failed");
 
     // Settings
     public static final Component SETTINGS_TITLE = Component.translatable("world_preview.settings.title");
