@@ -6,7 +6,6 @@ import caeruleusTait.world.preview.backend.color.PreviewMappingData;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.api.ModInitializer;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
@@ -74,7 +73,7 @@ public class WorldPreview implements ModInitializer {
     }
 
     public void loaderSpecificSetup(MinecraftServer minecraftServer) {
-        ServerLifecycleEvents.SERVER_STARTING.invoker().onServerStarting(minecraftServer);
+//        ServerLifecycleEvents.SERVER_STARTING.invoker().onServerStarting(minecraftServer);
     }
 
     public WorldPreviewConfig cfg() {
